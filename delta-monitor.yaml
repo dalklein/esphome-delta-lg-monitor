@@ -1,0 +1,1347 @@
+# ============================================================================
+# Production RGM sniffer for the Delta E6 <-> LG RESU bus.
+#
+# ### UARTAPI VARIANT — dogfooding the proposed upstream ESPHome change ###
+# Byte-for-byte the production config EXCEPT that the RGM bus goes through stock
+# ESPHome `uart` + the additive read_frame() API, instead of a component that
+# installs the UART driver itself. Same device name, same MQTT topics, same 70
+# registers, same '485' half — so this is a drop-in replacement and any behaviour
+# difference is attributable to the uart change alone.
+# Fallback: `esphome upload rgm-sniffer.yaml --device <ip>` restores production.
+#
+#   ESP32-WROOM-32, board esp32dev, framework esp-idf
+#   UART2 / GPIO17, RECEIVE ONLY  (no TX pin assigned, no TX buffer allocated:
+#                                  this firmware CANNOT transmit onto the bus)
+#
+# Frame boundaries come from the ESP32's HARDWARE idle-detect via the UART event
+# queue, not from loop timing. Proven 2026-09-09 frame-aligned and CRC-clean
+# through deliberate 60 ms loop stalls; the old ESPHome modbus path framed on a
+# millis() timer against a measured 24 ms loop and lost the 23-byte (213,9)
+# frame carrying SOC.
+#
+# TOPIC SCHEME (user, 2026-09-09):
+#   delta/rgm/...  this RGM-bus sniffer
+#   delta/485/...  the Delta's own '485' port master, to be added on UART1
+# ESPHome's topic_prefix is PER-DEVICE and both roles will share this one ESP32,
+# so the prefix is plain "delta" and every topic is set EXPLICITLY - including
+# birth/will/log, which would otherwise land on a bare "delta/status" and clash
+# with the existing delta/inv and delta/batt namespaces.
+# ============================================================================
+
+esphome:
+  # DELIBERATELY a different device name from production, so the two builds keep
+  # SEPARATE .esphome/build directories. That makes rollback an instant
+  #   esphome upload <fallback>.yaml --device <device-ip>
+  # with no recompile. MQTT topics are all set explicitly below, so they are
+  # unaffected by the name; only mDNS/OTA hostname and the MQTT client id change.
+  name: delta-rgm-uartapi
+  friendly_name: Delta RGM Sniffer (uart read_frame API)
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+  level: INFO
+  baud_rate: 0          # free UART0; logs go over WiFi/MQTT
+
+wifi:
+  networks:
+    - ssid: !secret wifi_ssid_g
+      password: !secret wifi_password
+    - ssid: !secret wifi_ssid
+      password: !secret wifi_password
+  ap:
+    ssid: "Delta RGM Sniff Fallback"
+    password: !secret ap_password
+
+captive_portal:
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+mqtt:
+  broker: !secret mqtt_broker_ip
+  port: 1883
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  topic_prefix: "delta"
+  birth_message:
+    topic: "delta/rgm/status"
+    payload: "online"
+  will_message:
+    topic: "delta/rgm/status"
+    payload: "offline"
+  log_topic:
+    topic: "delta/rgm/debug"
+  on_disconnect:
+    - logger.log: "MQTT broker unavailable, continuing to sniff."
+  on_message:
+    - topic: "delta/485/cmd/poll"
+      then:
+        - lambda: |-
+            if (x == "off") id(sw_485_poll).turn_off();
+            else if (x == "on") id(sw_485_poll).turn_on();
+
+external_components:
+  # The sniffer now lives in its own publishable repo -- ONE copy, no drift.
+  # Switch to github://dalklein/esphome-modbus-sniffer once that repo is pushed.
+  - source: github://dalklein/esphome-modbus-rtu-sniffer
+    components: [modbus_rtu_sniffer]
+  # uart is now STOCK ESPHome. The sniffer detects that read_frame() is unavailable and polls
+  # instead, which measured identically: 0 partial frames across ~14,000 frames with 25% of
+  # seconds containing a 144-161 ms loop stall. rx_full_threshold: 120 does the work.
+  # Fallback with the patched uart: rgm-sniffer-readframe-fallback.yaml
+  - source:
+      type: local
+      path: components
+    components: [solivia]      # ships with this repo
+
+# ---------------------------------------------------------------------------
+# UART on GPIO18/19 -> module 2, wired to the Delta's own '485' port
+#   RJ45 pin 7 = A+ , pin 8 = B-   (confirmed 2026-09-09; matches the udev note)
+#
+# ⚠️ DECLARED FOR SAFETY, NOT YET USED FOR POLLING.
+# Module 2 is an auto-direction RS485 board: its D (driver input) is on GPIO18. With no
+# uart declared, GPIO18 is an unconfigured INPUT and D FLOATS -- which can spuriously
+# enable the transmitter and put noise onto the live '485' port. Declaring the uart drives
+# the pin to UART idle (mark/high), holding the module in receive.
+#
+# 38400 8N1 is the Delta's '485' rate (NOT 9600 like the RGM bus).
+# When the master role is added: pace requests at >=95-100 ms, per the pack-needs-95ms
+# finding -- that limit is a property of the device, not the topology.
+uart:
+  - id: uart_485
+    tx_pin: GPIO18
+    rx_pin: GPIO19
+    baud_rate: 38400
+    stop_bits: 1
+    data_bits: 8
+    parity: NONE
+    rx_buffer_size: 512
+
+# ---------------------------------------------------------------------------
+# RGM bus, GPIO17 — SAME wire, SAME framing as production, but through STOCK
+# ESPHome uart plus the proposed read_frame() API instead of a component that
+# owns the peripheral itself.
+#
+#   production:  modbus_sniffer { rx_pin, uart_num: 2, baud_rate, gap_symbols: 3 }
+#   here:        uart { rx_pin, baud_rate, rx_timeout: 3, event_queue_size: 20 }
+#                + modbus_sniffer_uartapi { uart_id }
+#
+# rx_timeout: 3 is EXACTLY production's gap_symbols: 3 — same hardware register
+# (uart_set_rx_timeout), same 3.13 ms @9600, chosen between the two RTU limits.
+# No tx_pin and no tx buffer: this cannot transmit onto the RGM bus.
+#
+# event_queue_size: 20 is the opt-in. Without it read_frame() returns false and
+# supports_frame_reads() is false, i.e. stock ESPHome behaviour exactly.
+#
+# rx_full_threshold: see the note at the setting itself. It was RAISED TO 120 for EFFICIENCY
+# (at the computed default of 8, always_rx_timeout splits each frame into 7+1 events, 2.3x the
+# loop work). Correctness does not depend on it - that comes from always_rx_timeout.
+  - id: uart_rgm
+    rx_pin: GPIO17
+    baud_rate: 9600
+    rx_buffer_size: 1024
+    # 10 symbols = ~10.4 ms @9600. RAISED FROM 3 on 2026-09-10 when the REAL pack replaced BE
+    # on this bus. BE answered fast and tightly; the real LG has inter-byte gaps that exceed
+    # 3.1 ms, so frames were being SPLIT mid-frame -- 1.5% ongoing resync and a 12% drop in
+    # published messages (546/60s vs BE's 620), with crc_bad=0 throughout because a chunk that
+    # is not a whole frame never becomes one and no CRC counter can see it. This is the
+    # esphome#17180 mechanism on our own bus.
+    # 10 sits between the two real limits: longer than any observed inter-byte gap, and well
+    # under the 28.3 ms MINIMUM inter-frame idle measured on this bus.
+    # Consequence: request+response (turnaround ~5.9 ms) now MERGE into one chunk. That is
+    # safe -- the splitter cuts merged chunks by declared length and CRC. Splitting loses data;
+    # merging does not.
+    rx_timeout: 10
+    # CORRECTNESS comes from uart_set_always_rx_timeout() (armed automatically when
+    # event_queue_size > 0). EFFICIENCY comes from this. They are independent knobs.
+    # At ESPHome's computed default (8 bytes @9600) always_rx_timeout withholds a byte on
+    # the FIFO-full path, so each frame arrives as 7+1 -- measured 9632 UART events for
+    # 4193 frames (2.3x), i.e. ~113 events/s vs production's ~49. That extra loop work
+    # coincided with 7 modbus response timeouts on the CO-RESIDENT '485' master, which
+    # production never showed. 120 = one event per frame; the FIFO is 128.
+    rx_full_threshold: 120
+
+
+modbus_rtu_sniffer:
+  id: sniff
+  uart_id: uart_rgm
+
+# ===========================================================================
+# '485' PORT MASTER — the Delta's own SunSpec/Modbus-RTU slave port (addr 1)
+#
+# Stock ESPHome modbus + modbus_controller: this half of the dashboard is plain
+# Modbus RTU FC03, so there is no reason to hand-roll it.
+#
+# 🔴 READ ONLY. Only `sensor` platforms are declared — no number/output/switch —
+#    so nothing here can write to the inverter.
+# 🔑 command_throttle: 100ms  — the >=95 ms per-device pacing established on the
+#    LG (pack-needs-95ms-between-requests). Do not lower it.
+# ⚠️ SunSpec values come with a separate SCALE FACTOR register (an int16 power of
+#    ten). Both raw value AND its SF are published so the consumer can scale
+#    correctly; the SFs are NOT assumed here because this port has never been
+#    read from this device before.
+# ===========================================================================
+modbus:
+  - id: mb485
+    uart_id: uart_485
+    role: client
+
+modbus_controller:
+  - id: delta485
+    address: 1
+    modbus_id: mb485
+    command_throttle: 100ms
+    update_interval: 10s
+    setup_priority: -10
+
+# TEMPORARY, 2026-09-18: measure this device's actual loop-time TAIL.
+# The question is whether millis()-based framing could work on this bus at all, given the device
+# also runs the '485' master on UART1 at 38400 plus ~70 MQTT sensors. The bus's MINIMUM inter-frame
+# idle is 28.3 ms, so any loop iteration longer than that would straddle a frame boundary.
+# debug's loop_time publishes the MAX since the last update (see debug_component.cpp: max_loop_time_
+# then reset), which is the statistic that matters -- an average would hide exactly the tail we are
+# looking for. ESPHome's own "took a long time" warning only fires above 140 ms, so it cannot see
+# the 28-140 ms band, which is the band in question.
+debug:
+  update_interval: 1s    # max loop time PER SECOND: separates the ~4 s solivia stall from the baseline
+
+sensor:
+  - platform: debug
+    loop_time:
+      name: "RGM Loop Time"
+      id: rgm_loop_time
+      state_topic: "delta/rgm/sensor/loop_time/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta ac current"
+    id: d485_ac_a_raw
+    address: 40071
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/ac_a_raw/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta ac current sf"
+    id: d485_ac_a_sf
+    address: 40075
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/ac_a_sf/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta voltage L1-L2"
+    id: d485_v_l1l2_raw
+    address: 40076
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/v_l1l2_raw/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta voltage L1"
+    id: d485_v_l1_raw
+    address: 40079
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/v_l1_raw/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta voltage L2"
+    id: d485_v_l2_raw
+    address: 40080
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/v_l2_raw/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta voltage sf"
+    id: d485_v_sf
+    address: 40082
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/v_sf/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta ac power"
+    id: d485_ac_w_raw
+    address: 40083
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/ac_w_raw/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta ac power sf"
+    id: d485_ac_w_sf
+    address: 40084
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/ac_w_sf/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta frequency"
+    id: d485_hz_raw
+    address: 40085
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/hz_raw/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta frequency sf"
+    id: d485_hz_sf
+    address: 40086
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/hz_sf/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta apparent power"
+    id: d485_va_raw
+    address: 40087
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/va_raw/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta apparent power sf"
+    id: d485_va_sf
+    address: 40088
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/va_sf/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta reactive power"
+    id: d485_var_raw
+    address: 40089
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/var_raw/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta reactive power sf"
+    id: d485_var_sf
+    address: 40090
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/var_sf/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta power factor"
+    id: d485_pf_raw
+    address: 40091
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/pf_raw/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta power factor sf"
+    id: d485_pf_sf
+    address: 40092
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/pf_sf/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta heatsink temp"
+    id: d485_temp_raw
+    address: 40102
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/temp_raw/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta temp sf"
+    id: d485_temp_sf
+    address: 40106
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/temp_sf/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta meter power"
+    id: d485_meter_w
+    address: 49991
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/meter_w/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta battery charge W"
+    id: d485_batt_chg_w
+    address: 49998
+    register_type: holding
+    value_type: U_WORD
+    state_topic: "delta/485/sensor/batt_chg_w/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta battery discharge W"
+    id: d485_batt_dis_w
+    address: 49999
+    register_type: holding
+    value_type: U_WORD
+    state_topic: "delta/485/sensor/batt_dis_w/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta lifetime energy"
+    id: d485_wh_total
+    address: 40093
+    register_type: holding
+    value_type: U_DWORD
+    state_topic: "delta/485/sensor/wh_total_raw/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta lifetime energy sf"
+    id: d485_wh_sf
+    address: 40095
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/wh_total_sf/state"
+
+  # --- completing the tty3 dashboard set (added 2026-09-10) ---
+  # 1=off 2=sleeping 3=starting 4=MPPT running 5=throttled
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta inverter state"
+    id: d485_state
+    address: 40107
+    register_type: holding
+    value_type: U_WORD
+    state_topic: "delta/485/sensor/state/state"
+  # SunSpec Evt1 low word
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta event flags lo"
+    id: d485_evt1_lo
+    address: 40109
+    register_type: holding
+    value_type: U_WORD
+    state_topic: "delta/485/sensor/evt1_lo/state"
+  # SunSpec Evt1 high word
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta event flags hi"
+    id: d485_evt1_hi
+    address: 40110
+    register_type: holding
+    value_type: U_WORD
+    state_topic: "delta/485/sensor/evt1_hi/state"
+  # SIGNED watts 1:1, +chg / -dis (identified 2026-09-04, r=0.9933 vs 50094*50095)
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta battery DC power"
+    id: d485_batt_w
+    address: 50084
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/batt_w/state"
+  # Wh
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta battery energy B"
+    id: d485_batt_wh_b
+    address: 50086
+    register_type: holding
+    value_type: U_WORD
+    state_topic: "delta/485/sensor/batt_wh_b/state"
+  # Wh
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta battery energy A"
+    id: d485_batt_wh_a
+    address: 50087
+    register_type: holding
+    value_type: U_WORD
+    state_topic: "delta/485/sensor/batt_wh_a/state"
+  # purpose not yet identified
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta batt block 50090"
+    id: d485_b50090
+    address: 50090
+    register_type: holding
+    value_type: U_WORD
+    state_topic: "delta/485/sensor/b50090/state"
+  # purpose not yet identified
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta batt block 50092"
+    id: d485_b50092
+    address: 50092
+    register_type: holding
+    value_type: U_WORD
+    state_topic: "delta/485/sensor/b50092/state"
+  # divide by 10 for volts
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta battery bus voltage"
+    id: d485_batt_bus_v
+    address: 50094
+    register_type: holding
+    value_type: U_WORD
+    state_topic: "delta/485/sensor/batt_bus_v/state"
+  # SIGNED, divide by 10 for amps
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta battery bus current"
+    id: d485_batt_bus_a
+    address: 50095
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/batt_bus_a/state"
+  # purpose not yet identified
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta batt block 50096"
+    id: d485_b50096
+    address: 50096
+    register_type: holding
+    value_type: U_WORD
+    state_topic: "delta/485/sensor/b50096/state"
+  # purpose not yet identified
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta batt block 50097"
+    id: d485_b50097
+    address: 50097
+    register_type: holding
+    value_type: U_WORD
+    state_topic: "delta/485/sensor/b50097/state"
+  # purpose not yet identified
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta batt block 50107"
+    id: d485_b50107
+    address: 50107
+    register_type: holding
+    value_type: U_WORD
+    state_topic: "delta/485/sensor/b50107/state"
+  # purpose not yet identified
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta batt block 50116"
+    id: d485_b50116
+    address: 50116
+    register_type: holding
+    value_type: U_WORD
+    state_topic: "delta/485/sensor/b50116/state"
+
+  # --- SOLIVIA values (cmd 111), the half SunSpec cannot reach ---
+  - platform: solivia
+    solivia_id: sol485
+    name: "delta pv1 voltage"
+    id: sol_pv1_v
+    cmd: 111
+    sub: 1
+    divisor: 10.0
+    accuracy_decimals: 1   # ESPHome defaults to 0 when unset, which rounded every value to a whole number
+    state_topic: "delta/485/sensor/pv1_v/state"
+  - platform: solivia
+    solivia_id: sol485
+    name: "delta pv1 current"
+    id: sol_pv1_a
+    on_value:
+      then:
+        - lambda: |-
+            if (!isnan(id(sol_pv1_v).state))
+              id(pv1_w).publish_state(id(sol_pv1_v).state * x);
+    cmd: 111
+    sub: 2
+    divisor: 100.0
+    accuracy_decimals: 2   # ESPHome defaults to 0 when unset, which rounded every value to a whole number
+    state_topic: "delta/485/sensor/pv1_a/state"
+  - platform: solivia
+    solivia_id: sol485
+    name: "delta pv2 voltage"
+    id: sol_pv2_v
+    cmd: 111
+    sub: 11
+    divisor: 10.0
+    accuracy_decimals: 1   # ESPHome defaults to 0 when unset, which rounded every value to a whole number
+    state_topic: "delta/485/sensor/pv2_v/state"
+  - platform: solivia
+    solivia_id: sol485
+    name: "delta pv2 current"
+    id: sol_pv2_a
+    on_value:
+      then:
+        - lambda: |-
+            if (!isnan(id(sol_pv2_v).state)) {
+              float p2 = id(sol_pv2_v).state * x;
+              id(pv2_w).publish_state(p2);
+              if (!isnan(id(pv1_w).state))
+                id(pv_total_w).publish_state(id(pv1_w).state + p2);
+            }
+    cmd: 111
+    sub: 12
+    divisor: 100.0
+    accuracy_decimals: 2   # ESPHome defaults to 0 when unset, which rounded every value to a whole number
+    state_topic: "delta/485/sensor/pv2_a/state"
+  - platform: solivia
+    solivia_id: sol485
+    name: "delta dc bus voltage"
+    id: sol_dcbus_v
+    cmd: 111
+    sub: 31
+    divisor: 10.0
+    accuracy_decimals: 1   # ESPHome defaults to 0 when unset, which rounded every value to a whole number
+    state_topic: "delta/485/sensor/dcbus_v/state"
+  # --- DERIVED PV POWER --------------------------------------------------
+  # There is NO PV power register and NO PV energy counter on this inverter
+  # (SunSpec model 160 is not implemented; the vendor block has none either).
+  # Computed here rather than in Node-RED so consumers get ONE topic instead of
+  # having to join two topics that arrive ~2 s apart on the SOLIVIA cycle.
+  # isnan() guard: the source sensors are NaN until their first poll completes.
+  - platform: template
+    name: "delta pv1 power"
+    id: pv1_w
+    unit_of_measurement: W
+    device_class: power
+    accuracy_decimals: 1
+    update_interval: never      # published by sol_pv1_a's on_value - see below
+    state_topic: "delta/485/sensor/pv1_w/state"
+  - platform: template
+    name: "delta pv2 power"
+    id: pv2_w
+    unit_of_measurement: W
+    device_class: power
+    accuracy_decimals: 1
+    update_interval: never      # published by sol_pv2_a's on_value - see below
+    state_topic: "delta/485/sensor/pv2_w/state"
+  - platform: template
+    name: "delta pv total power"
+    id: pv_total_w
+    unit_of_measurement: W
+    device_class: power
+    accuracy_decimals: 1
+    update_interval: never      # published by sol_pv2_a's on_value - see below
+    state_topic: "delta/485/sensor/pv_total_w/state"
+
+  # grid_hz REMOVED 2026-09-10: identical information is already on the Modbus side as
+  # hz_raw/hz_sf (SunSpec), which cost nothing extra because that poll happens anyway.
+  # Dropping it takes SOLIVIA from 6 values to 5 = -17% '485' traffic for no loss.
+  # NOTE: this was the cross-protocol check that validated the SOLIVIA decode
+  # (SOLIVIA 59.97 vs SunSpec 59.99). That validation is already recorded; if it ever needs
+  # repeating, add the sensor back temporarily rather than trusting memory.
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 102
+    value_type: S_WORD
+    name: "lg 102"
+    id: lg_102
+    state_topic: "delta/rgm/sensor/lg_102/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 103
+    value_type: S_WORD
+    name: "lg 103"
+    id: lg_103
+    state_topic: "delta/rgm/sensor/lg_103/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 110
+    value_type: S_WORD
+    name: "lg 110"
+    id: lg_110
+    state_topic: "delta/rgm/sensor/lg_110/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 111
+    value_type: S_WORD
+    name: "lg 111"
+    id: lg_111
+    state_topic: "delta/rgm/sensor/lg_111/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 112
+    value_type: S_WORD
+    name: "lg 112"
+    id: lg_112
+    state_topic: "delta/rgm/sensor/lg_112/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 113
+    value_type: S_WORD
+    name: "lg 113"
+    id: lg_113
+    state_topic: "delta/rgm/sensor/lg_113/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 114
+    value_type: S_WORD
+    name: "lg 114"
+    id: lg_114
+    state_topic: "delta/rgm/sensor/lg_114/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 115
+    value_type: S_WORD
+    name: "lg 115"
+    id: lg_115
+    state_topic: "delta/rgm/sensor/lg_115/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 116
+    value_type: U_WORD
+    name: "lg 116"
+    id: lg_116
+    state_topic: "delta/rgm/sensor/lg_116/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 117
+    value_type: S_WORD
+    name: "lg 117"
+    id: lg_117
+    state_topic: "delta/rgm/sensor/lg_117/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 118
+    value_type: S_WORD
+    name: "lg 118"
+    id: lg_118
+    state_topic: "delta/rgm/sensor/lg_118/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 119
+    value_type: S_WORD
+    name: "lg 119"
+    id: lg_119
+    state_topic: "delta/rgm/sensor/lg_119/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 120
+    value_type: S_WORD
+    name: "lg 120"
+    id: lg_120
+    state_topic: "delta/rgm/sensor/lg_120/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 121
+    value_type: S_WORD
+    name: "lg 121"
+    id: lg_121
+    state_topic: "delta/rgm/sensor/lg_121/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 122
+    value_type: S_WORD
+    name: "lg 122"
+    id: lg_122
+    state_topic: "delta/rgm/sensor/lg_122/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 123
+    value_type: S_WORD
+    name: "lg 123"
+    id: lg_123
+    state_topic: "delta/rgm/sensor/lg_123/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 124
+    value_type: S_WORD
+    name: "lg 124"
+    id: lg_124
+    state_topic: "delta/rgm/sensor/lg_124/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 125
+    value_type: S_WORD
+    name: "lg 125"
+    id: lg_125
+    state_topic: "delta/rgm/sensor/lg_125/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 126
+    value_type: S_WORD
+    name: "lg 126"
+    id: lg_126
+    state_topic: "delta/rgm/sensor/lg_126/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 127
+    value_type: S_WORD
+    name: "lg 127"
+    id: lg_127
+    state_topic: "delta/rgm/sensor/lg_127/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 141
+    value_type: S_WORD
+    name: "lg 141"
+    id: lg_141
+    state_topic: "delta/rgm/sensor/lg_141/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 142
+    value_type: S_WORD
+    name: "lg 142"
+    id: lg_142
+    state_topic: "delta/rgm/sensor/lg_142/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 201
+    value_type: U_WORD
+    name: "lg 201"
+    id: lg_201
+    state_topic: "delta/rgm/sensor/lg_201/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 202
+    value_type: U_WORD
+    name: "lg 202"
+    id: lg_202
+    state_topic: "delta/rgm/sensor/lg_202/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 203
+    value_type: S_WORD
+    name: "lg 203"
+    id: lg_203
+    state_topic: "delta/rgm/sensor/lg_203/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 204
+    value_type: S_WORD
+    name: "lg 204"
+    id: lg_204
+    state_topic: "delta/rgm/sensor/lg_204/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 205
+    value_type: U_WORD
+    name: "lg 205"
+    id: lg_205
+    state_topic: "delta/rgm/sensor/lg_205/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 206
+    value_type: S_WORD
+    name: "lg 206"
+    id: lg_206
+    state_topic: "delta/rgm/sensor/lg_206/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 207
+    value_type: U_WORD
+    name: "lg 207"
+    id: lg_207
+    state_topic: "delta/rgm/sensor/lg_207/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 208
+    value_type: U_WORD
+    name: "lg 208"
+    id: lg_208
+    state_topic: "delta/rgm/sensor/lg_208/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 209
+    value_type: U_WORD
+    name: "lg 209"
+    id: lg_209
+    state_topic: "delta/rgm/sensor/lg_209/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 210
+    value_type: U_WORD
+    name: "lg 210"
+    id: lg_210
+    state_topic: "delta/rgm/sensor/lg_210/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 211
+    value_type: U_WORD
+    name: "lg 211"
+    id: lg_211
+    state_topic: "delta/rgm/sensor/lg_211/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 212
+    value_type: U_WORD
+    name: "lg 212"
+    id: lg_212
+    state_topic: "delta/rgm/sensor/lg_212/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 213
+    value_type: U_WORD
+    name: "lg 213"
+    id: lg_213
+    state_topic: "delta/rgm/sensor/lg_213/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 214
+    value_type: U_WORD
+    name: "lg 214"
+    id: lg_214
+    state_topic: "delta/rgm/sensor/lg_214/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 215
+    value_type: U_WORD
+    name: "lg 215"
+    id: lg_215
+    state_topic: "delta/rgm/sensor/lg_215/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 216
+    value_type: S_WORD
+    name: "lg 216"
+    id: lg_216
+    state_topic: "delta/rgm/sensor/lg_216/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 217
+    value_type: U_WORD
+    name: "lg 217"
+    id: lg_217
+    state_topic: "delta/rgm/sensor/lg_217/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 218
+    value_type: S_WORD
+    name: "lg 218"
+    id: lg_218
+    state_topic: "delta/rgm/sensor/lg_218/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 219
+    value_type: U_WORD
+    name: "lg 219"
+    id: lg_219
+    state_topic: "delta/rgm/sensor/lg_219/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 220
+    value_type: S_WORD
+    name: "lg 220"
+    id: lg_220
+    state_topic: "delta/rgm/sensor/lg_220/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 221
+    value_type: U_WORD
+    name: "lg 221"
+    id: lg_221
+    state_topic: "delta/rgm/sensor/lg_221/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 222
+    value_type: U_WORD
+    name: "lg 222"
+    id: lg_222
+    state_topic: "delta/rgm/sensor/lg_222/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 223
+    value_type: S_WORD
+    name: "lg 223"
+    id: lg_223
+    state_topic: "delta/rgm/sensor/lg_223/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 224
+    value_type: S_WORD
+    name: "lg 224"
+    id: lg_224
+    state_topic: "delta/rgm/sensor/lg_224/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 225
+    value_type: U_WORD
+    name: "lg 225"
+    id: lg_225
+    state_topic: "delta/rgm/sensor/lg_225/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 226
+    value_type: S_WORD
+    name: "lg 226"
+    id: lg_226
+    state_topic: "delta/rgm/sensor/lg_226/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 227
+    value_type: U_WORD
+    name: "lg 227"
+    id: lg_227
+    state_topic: "delta/rgm/sensor/lg_227/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 228
+    value_type: S_WORD
+    name: "lg 228"
+    id: lg_228
+    state_topic: "delta/rgm/sensor/lg_228/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 229
+    value_type: U_WORD
+    name: "lg 229"
+    id: lg_229
+    state_topic: "delta/rgm/sensor/lg_229/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 230
+    value_type: U_WORD
+    name: "lg 230"
+    id: lg_230
+    state_topic: "delta/rgm/sensor/lg_230/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 234
+    value_type: U_WORD
+    name: "lg 234"
+    id: lg_234
+    state_topic: "delta/rgm/sensor/lg_234/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 1100
+    value_type: U_WORD
+    name: "lg 1100"
+    id: lg_1100
+    state_topic: "delta/rgm/sensor/lg_1100/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 1101
+    value_type: U_WORD
+    name: "lg 1101"
+    id: lg_1101
+    state_topic: "delta/rgm/sensor/lg_1101/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 1102
+    value_type: U_WORD
+    name: "lg 1102"
+    id: lg_1102
+    state_topic: "delta/rgm/sensor/lg_1102/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 1103
+    value_type: U_WORD
+    name: "lg 1103"
+    id: lg_1103
+    state_topic: "delta/rgm/sensor/lg_1103/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 1104
+    value_type: U_WORD
+    name: "lg 1104"
+    id: lg_1104
+    state_topic: "delta/rgm/sensor/lg_1104/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 1105
+    value_type: U_WORD
+    name: "lg 1105"
+    id: lg_1105
+    state_topic: "delta/rgm/sensor/lg_1105/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 1106
+    value_type: U_WORD
+    name: "lg 1106"
+    id: lg_1106
+    state_topic: "delta/rgm/sensor/lg_1106/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 1107
+    value_type: U_WORD
+    name: "lg 1107"
+    id: lg_1107
+    state_topic: "delta/rgm/sensor/lg_1107/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 1108
+    value_type: U_WORD
+    name: "lg 1108"
+    id: lg_1108
+    state_topic: "delta/rgm/sensor/lg_1108/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 1109
+    value_type: U_WORD
+    name: "lg 1109"
+    id: lg_1109
+    state_topic: "delta/rgm/sensor/lg_1109/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 1110
+    value_type: U_WORD
+    name: "lg 1110"
+    id: lg_1110
+    state_topic: "delta/rgm/sensor/lg_1110/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 1111
+    value_type: U_WORD
+    name: "lg 1111"
+    id: lg_1111
+    state_topic: "delta/rgm/sensor/lg_1111/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 1112
+    value_type: U_WORD
+    name: "lg 1112"
+    id: lg_1112
+    state_topic: "delta/rgm/sensor/lg_1112/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 2001
+    value_type: U_WORD
+    name: "lg 2001"
+    id: lg_2001
+    state_topic: "delta/rgm/sensor/lg_2001/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 2004
+    value_type: U_WORD
+    name: "lg 2004"
+    id: lg_2004
+    state_topic: "delta/rgm/sensor/lg_2004/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 2005
+    value_type: U_WORD
+    name: "lg 2005"
+    id: lg_2005
+    state_topic: "delta/rgm/sensor/lg_2005/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 2006
+    value_type: S_WORD
+    name: "lg 2006"
+    id: lg_2006
+    state_topic: "delta/rgm/sensor/lg_2006/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 2007
+    value_type: S_WORD
+    name: "lg 2007"
+    id: lg_2007
+    state_topic: "delta/rgm/sensor/lg_2007/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 2011
+    value_type: U_WORD
+    name: "lg 2011"
+    id: lg_2011
+    state_topic: "delta/rgm/sensor/lg_2011/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 2012
+    value_type: U_WORD
+    name: "lg 2012"
+    id: lg_2012
+    state_topic: "delta/rgm/sensor/lg_2012/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 2013
+    value_type: S_WORD
+    name: "lg 2013"
+    id: lg_2013
+    state_topic: "delta/rgm/sensor/lg_2013/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 2014
+    value_type: U_WORD
+    name: "lg 2014"
+    id: lg_2014
+    state_topic: "delta/rgm/sensor/lg_2014/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 2021
+    value_type: U_WORD
+    name: "lg 2021"
+    id: lg_2021
+    state_topic: "delta/rgm/sensor/lg_2021/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 2022
+    value_type: U_WORD
+    name: "lg 2022"
+    id: lg_2022
+    state_topic: "delta/rgm/sensor/lg_2022/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 2023
+    value_type: S_WORD
+    name: "lg 2023"
+    id: lg_2023
+    state_topic: "delta/rgm/sensor/lg_2023/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 2024
+    value_type: U_WORD
+    name: "lg 2024"
+    id: lg_2024
+    state_topic: "delta/rgm/sensor/lg_2024/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 2031
+    value_type: U_WORD
+    name: "lg 2031"
+    id: lg_2031
+    state_topic: "delta/rgm/sensor/lg_2031/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 2032
+    value_type: U_WORD
+    name: "lg 2032"
+    id: lg_2032
+    state_topic: "delta/rgm/sensor/lg_2032/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 2033
+    value_type: S_WORD
+    name: "lg 2033"
+    id: lg_2033
+    state_topic: "delta/rgm/sensor/lg_2033/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x0F
+    register: 2034
+    value_type: U_WORD
+    name: "lg 2034"
+    id: lg_2034
+    state_topic: "delta/rgm/sensor/lg_2034/state"
+
+
+# ===========================================================================
+# BUS-SHARING HOOK for the '485' port
+#
+# Only ONE master may drive a bus. To let another master (or anything else) explore
+# the '485' port, STOP this board polling first:
+#
+#     mosquitto_pub -t delta/485/cmd/poll -m off     # release the bus
+#     mosquitto_pub -t delta/485/cmd/poll -m on      # take it back
+#
+# modbus_controller is a PollingComponent, so stop_poller() halts it cleanly at
+# a transaction boundary - no half-finished exchange left on the wire. State is
+# echoed on delta/485/status/poll so a script can confirm the bus is free
+# before transmitting.
+# ⚠️ The RGM sniffer is UNAFFECTED and stays receive-only throughout.
+# ===========================================================================
+# SOLIVIA: the Delta's second protocol on the '485' port. Carries the per-string PV data
+# and DC-bus/grid values that SunSpec does not expose. Read-only by construction.
+solivia:
+  id: sol485
+  uart_id: uart_485
+  address: 1
+  # burst 2 + 4 s interval == the old 1 + 2 s in bus load (0.5 req/s) and in refresh
+  # period (12 s per value), but each V/A PAIR is now polled ~100 ms apart instead of
+  # 2 s apart. Sensor declaration order below is what pairs them: pv1_v,pv1_a |
+  # pv2_v,pv2_a | dcbus_v,grid_hz. Do not reorder without re-checking the pairing.
+  burst: 2
+  update_interval: 4s
+
+switch:
+  - platform: template
+    name: "delta 485 polling"
+    id: sw_485_poll
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    turn_on_action:
+      - lambda: |-
+          id(delta485)->start_poller();
+          id(sol485)->start_poller();
+          ESP_LOGI("bus485", "polling ENABLED - this board owns the '485' bus");
+      - mqtt.publish:
+          topic: "delta/485/status/poll"
+          payload: "on"
+          retain: true
+    turn_off_action:
+      - lambda: |-
+          id(delta485)->stop_poller();
+          id(sol485)->stop_poller();
+          ESP_LOGI("bus485", "polling DISABLED - '485' bus released for another master");
+      - mqtt.publish:
+          topic: "delta/485/status/poll"
+          payload: "off"
+          retain: true
+
