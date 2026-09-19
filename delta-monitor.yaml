@@ -112,11 +112,20 @@ uart:
 # ⚖️ NOT the same case as GPIO18 above, and the difference is worth keeping straight.
 #    GPIO18 DRIVES the '485' module's driver input, so it must be declared even when
 #    that port is not polled — an undriven DI can float and key the transmitter onto a
-#    live bus. GPIO17 only RECEIVES: the RGM module's RO drives it, and no ESP pin
-#    reaches that module's DI at all. So a config that omits this uart entirely (a
-#    PV-only build with no battery to sniff) leaves GPIO17 as an unconfigured input
-#    and creates NO risk to the RGM bus. Omitting the '485' uart would not be safe;
-#    omitting this one is.
+#    live bus. GPIO17 only RECEIVES: the RGM module's RO drives it, and no ESP pin is
+#    CONFIGURED to reach that module's DI. So a config that omits this uart entirely
+#    (a PV-only build with no battery to sniff) leaves GPIO17 as an unconfigured input
+#    and puts nothing at risk on the bus the inverter masters. Omitting the '485' uart
+#    would not be safe; omitting this one is.
+#
+# ⚠️ SCOPE OF THAT CLAIM: it is verified from the CONFIG -- only GPIO17/18/19 are
+#    configured anywhere, GPIO16 appears in no pin field, and uart_rgm declares no
+#    tx_pin. Nobody has inspected the board. If the RGM module's DI is wired to an ESP
+#    pin anyway, that is outside what any config can tell you -- check it before
+#    trusting this on a bus the inverter masters. The supporting evidence is
+#    operational, not observational: months of the Delta mastering this bus with
+#    crc_bad=0 across millions of sniffed frames. That says the CURRENT wiring is
+#    safe, not that the design is safe by construction.
   - id: uart_rgm
     rx_pin: GPIO17
     baud_rate: 9600
