@@ -1239,6 +1239,81 @@ sensor:
     id: lg_2034
     state_topic: "delta/rgm/sensor/lg_2034/state"
 
+# ---------------------------------------------------------------------------
+# THE REVENUE METER at 0x02, as the Delta actually sees it.
+#
+# The Delta polls the meter on this same bus, so these frames already arrive here
+# and were previously decoded by nobody. They answer one question: what is the
+# inverter being told about the grid?
+#
+# This works with or without a meter MITM in the path. With no MITM you are reading
+# the real meter. With one, you are reading what the MITM serves -- measured on the
+# wire by a device that plays no part in producing it, which is the only way to check
+# a MITM without asking the MITM.
+#
+# 🔑 SCALING. SunSpec keeps the scale factor in its own register.
+#   * W / WphA / WphB (40018/40019/40020) scale by W_SF at 40022, which is NOT
+#     constant: 0 means coefficient 1, 1 means coefficient 10. It switches by
+#     magnitude, so apply the SF sampled alongside, never a remembered one.
+#     It costs nothing here -- the Delta reads 40018 x5, so 40022 arrives in the
+#     same response frame.
+#   * AphA / AphB (40003/40004) scale by A_SF, which is a fixed -1 on this meter,
+#     i.e. 0.1 A per count. A_SF lives at 40006 and the Delta never reads it, so
+#     it cannot be sniffed -- it is taken from the meter's register map.
+# Raw values are published and the consumer applies the scaling, matching how the
+# '485' SunSpec sensors above are handled.
+#
+# ⚠️ Split-phase (ABN) meter: there is no phase C. Those registers exist in the
+#    SunSpec model but are fixed at 0.
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x02
+    register: 40003
+    value_type: S_WORD
+    name: "meter AphA raw"
+    id: mtr_40003
+    state_topic: "delta/rgm/sensor/mtr_apha_raw/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x02
+    register: 40004
+    value_type: S_WORD
+    name: "meter AphB raw"
+    id: mtr_40004
+    state_topic: "delta/rgm/sensor/mtr_aphb_raw/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x02
+    register: 40018
+    value_type: S_WORD
+    name: "meter W raw"
+    id: mtr_40018
+    state_topic: "delta/rgm/sensor/mtr_w_raw/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x02
+    register: 40019
+    value_type: S_WORD
+    name: "meter WphA raw"
+    id: mtr_40019
+    state_topic: "delta/rgm/sensor/mtr_wpha_raw/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x02
+    register: 40020
+    value_type: S_WORD
+    name: "meter WphB raw"
+    id: mtr_40020
+    state_topic: "delta/rgm/sensor/mtr_wphb_raw/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x02
+    register: 40022
+    value_type: S_WORD
+    name: "meter W_SF"
+    id: mtr_40022
+    state_topic: "delta/rgm/sensor/mtr_w_sf/state"
+
 
 # ===========================================================================
 # BUS-SHARING HOOK for the '485' port

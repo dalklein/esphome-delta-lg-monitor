@@ -121,6 +121,18 @@ as "warmest cell" for a whole project. The temperature set is exactly two regist
 **Delta inverter** — AC current, voltage, power and frequency, apparent and reactive power, and PV
 string voltage and current per MPPT, via SunSpec and SOLIVIA.
 
+**The revenue meter at `0x02`**, sniffed from the same RGM bus — `W`, `WphA`, `WphB`, `AphA`,
+`AphB` and the variable `W_SF`. The Delta polls the meter on this wire anyway, so these frames
+already arrive and cost nothing extra to decode. They answer "what is the inverter being told
+about the grid?", which is not the same question as "what is the grid doing" if anything sits
+in between.
+
+⚠️ `W_SF` (40022) is **not constant** — 0 means coefficient 1, 1 means coefficient 10, switching
+by magnitude. Apply the factor sampled alongside the value, never a remembered one. It arrives
+in the same response frame, since the Delta reads `40018` ×5. `AphA`/`AphB` use `A_SF`, a fixed
+−1 (0.1 A per count) taken from the meter's register map — the Delta never reads that register,
+so it cannot be sniffed.
+
 ## Register map
 
 `docs/LG_RESU_Prime_register_map.ods` — the LG read/write registers, the Delta '485' register list,
