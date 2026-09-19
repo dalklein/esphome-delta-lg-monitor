@@ -81,6 +81,17 @@ bool Solivia::transact_(uint8_t cmd, uint8_t sub, uint16_t &value_out) {
       if (this->read_byte(&b)) {
         buf[n++] = b;
         last = millis();
+        // A complete reply is recognisable the instant it lands -- ETX last, and the CRC
+        // over bytes 1..n-4 matching the pair before it -- so there is nothing to wait
+        // out. This skips the 50 ms silence on the SUCCESS path only; the silence rule
+        // below still catches a truncated reply. CRC is what makes ETX usable as a
+        // boundary at all, since 0x03 also occurs inside payload data.
+        // ⚠️ Note this BREAKS THE while, it does not return: see the DO NOT MAKE THIS
+        // NON-BLOCKING note above. Holding the loop is what keeps the co-resident modbus
+        // client from eating this reply.
+        if (n >= 10 && buf[n - 1] == 0x03 &&
+            crc_arc(&buf[1], n - 4) == (uint16_t) (buf[n - 3] | (buf[n - 2] << 8)))
+          break;
       }
     } else if (millis() - last > 50) {
       break;
