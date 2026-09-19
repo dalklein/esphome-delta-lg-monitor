@@ -141,9 +141,14 @@ modbus_rtu_sniffer:
 #
 # 🔴 READ ONLY. Only `sensor` platforms are declared — no number/output/switch —
 #    so nothing here can write to the inverter.
-# 🔑 command_throttle: 100ms — these devices need >=95 ms between requests or they
-#    start dropping replies. It is a property of the hardware, not of the bus
-#    topology, and it applies per device. Do not lower it.
+# 🔑 BUS SPACING, and nothing in this file sets it. These devices need >=95 ms between
+#    requests or they start dropping replies — a property of the hardware, not of the
+#    topology, and it applies per device. That floor is supplied by the `modbus` hub's
+#    `turnaround_time`, which DEFAULTS TO 600 ms — six times wider than needed, and
+#    measured 2026-09-19 to still let all 45 '485' sensors meet their update_interval.
+#    ⚠️ `command_throttle` on the controller is INERT since 2026.8 and is removed in
+#    2027.2.0. If you ever need the bus tighter, set `turnaround_time` on the hub above,
+#    and never below the 95 ms floor.
 # ⚠️ SunSpec values come with a separate SCALE FACTOR register (an int16 power of
 #    ten). Both the raw value AND its SF are published, so the consumer applies the
 #    scaling. The SFs are deliberately not assumed here.
@@ -157,7 +162,6 @@ modbus_controller:
   - id: delta485
     address: 1
     modbus_id: mb485
-    command_throttle: 100ms
     update_interval: 10s
     setup_priority: -10
 
