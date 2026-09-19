@@ -1,8 +1,7 @@
 # esphome-delta-lg-monitor
 
-ESPHome config for monitoring a **Delta E-series hybrid inverter** and an **LG RESU10H-Prime**
-battery over RS485, on a single ESP32. Publishes ~70 battery registers and the inverter's own
-telemetry to MQTT / Home Assistant.
+ESPHome config for monitoring a **Delta E-series hybrid inverter** E(4/6/8/10)-TL-US
+and an **LG RESU10H-Prime** battery over RS485, on a single ESP32. Publishes ~70 battery registers and the inverter telemetry to MQTT / Home Assistant.
 
 It **never transmits on the battery bus** — that side is receive-only, by wiring and by config.
 
@@ -30,9 +29,9 @@ listen there is correctly silent and proves nothing: you have to poll it to get 
 > 🛑 **Never transmit on the RGM bus.** The Delta masters it, and a second transmitter will corrupt
 > its control loop.
 
-### A third bus, if a meter MITM is in the way
+### A third bus, if a meter MITM is used
 
-Putting a man-in-the-middle in front of the revenue meter splits the meter off onto a bus of its
+Putting a man-in-the-middle in front of the revenue meter splits the meter onto a bus of its
 own. The MITM answers the Delta at `0x02` as if it were the meter, and separately polls the real
 meter on the new segment:
 
@@ -51,6 +50,9 @@ the device **always NAKs** an unsupported command — so **silence means a comms
 "unsupported"** — and the SOLIVIA log indices are **fixed slot IDs, not dates**.
 
 ## Hardware
+
+* **Delta E6-TL-US** inverter — E4/E8/E10-TL-US should work
+* **LG RESU Prime 10H** battery — 16H should work
 
 ```
 ESP32-WROOM-32 (esp32dev, esp-idf)
@@ -126,8 +128,7 @@ the SOLIVIA command map, and the learnings behind them.
 
 ## Related, not published
 
-A companion project puts an ESP32 **in series with the revenue meter** — the third bus described
-above — and steers charge and discharge by offsetting what the inverter is told the house is doing.
+A companion project puts an ESP32 **in series with the grid connection meter** — the third bus described above — and steers charge and discharge by offsetting what the inverter sees as grid power flow.
 
 That is a different category of thing from this repo: it **transmits**, it **changes inverter
 behaviour**, and it means cutting into the meter run. Worth being deliberate about on a grid-tied

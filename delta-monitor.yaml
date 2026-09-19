@@ -1,41 +1,28 @@
 # ============================================================================
-# Production RGM sniffer for the Delta E6 <-> LG RESU bus.
-#
-# ### UARTAPI VARIANT — dogfooding the proposed upstream ESPHome change ###
-# Byte-for-byte the production config EXCEPT that the RGM bus goes through stock
-# ESPHome `uart` + the additive read_frame() API, instead of a component that
-# installs the UART driver itself. Same device name, same MQTT topics, same 70
-# registers, same '485' half — so this is a drop-in replacement and any behaviour
-# difference is attributable to the uart change alone.
-# Fallback: `esphome upload rgm-sniffer.yaml --device <ip>` restores production.
+# Delta E-series inverter + LG RESU10H-Prime monitor, one ESP32, two RS485 buses.
 #
 #   ESP32-WROOM-32, board esp32dev, framework esp-idf
-#   UART2 / GPIO17, RECEIVE ONLY  (no TX pin assigned, no TX buffer allocated:
-#                                  this firmware CANNOT transmit onto the bus)
 #
-# Frame boundaries come from the ESP32's HARDWARE idle-detect via the UART event
-# queue, not from loop timing. Proven 2026-09-09 frame-aligned and CRC-clean
-# through deliberate 60 ms loop stalls; the old ESPHome modbus path framed on a
-# millis() timer against a measured 24 ms loop and lost the 23-byte (213,9)
-# frame carrying SOC.
+#   UART2 / GPIO17  RGM bus,   9600 8N1   RECEIVE ONLY
+#                   No tx_pin and no TX buffer are declared, so this firmware
+#                   physically cannot transmit onto the bus the inverter masters.
+#   UART1 / GPIO18 TX, GPIO19 RX
+#                   the Delta's own '485' port, 38400 8N1, Delta is the slave
+#                   at address 1. This board masters it.
 #
-# TOPIC SCHEME (user, 2026-09-09):
-#   delta/rgm/...  this RGM-bus sniffer
-#   delta/485/...  the Delta's own '485' port master, to be added on UART1
-# ESPHome's topic_prefix is PER-DEVICE and both roles will share this one ESP32,
-# so the prefix is plain "delta" and every topic is set EXPLICITLY - including
-# birth/will/log, which would otherwise land on a bare "delta/status" and clash
-# with the existing delta/inv and delta/batt namespaces.
+# MQTT TOPICS are set explicitly on every entity, because one device serves both
+# roles and ESPHome's topic_prefix is per-device:
+#     delta/rgm/...   the RGM bus sniffer (battery)
+#     delta/485/...   the Delta's own port (inverter telemetry)
+# Birth, will and log topics are set explicitly too, or they would land on a bare
+# "delta/status".
 # ============================================================================
 
 esphome:
-  # DELIBERATELY a different device name from production, so the two builds keep
-  # SEPARATE .esphome/build directories. That makes rollback an instant
-  #   esphome upload <fallback>.yaml --device <device-ip>
-  # with no recompile. MQTT topics are all set explicitly below, so they are
-  # unaffected by the name; only mDNS/OTA hostname and the MQTT client id change.
-  name: delta-rgm-uartapi
-  friendly_name: Delta RGM Sniffer (uart read_frame API)
+  # The name sets the mDNS/OTA hostname and the MQTT client id. It does NOT affect
+  # the MQTT topics, which are set explicitly on every entity below.
+  name: delta-monitor
+  friendly_name: Delta + LG RESU Monitor
 
 esp32:
   board: esp32dev
@@ -86,32 +73,21 @@ mqtt:
             else if (x == "on") id(sw_485_poll).turn_on();
 
 external_components:
-  # The sniffer now lives in its own publishable repo -- ONE copy, no drift.
-  # Switch to github://dalklein/esphome-modbus-sniffer once that repo is pushed.
   - source: github://dalklein/esphome-modbus-rtu-sniffer
     components: [modbus_rtu_sniffer]
-  # uart is now STOCK ESPHome. The sniffer detects that read_frame() is unavailable and polls
-  # instead, which measured identically: 0 partial frames across ~14,000 frames with 25% of
-  # seconds containing a 144-161 ms loop stall. rx_full_threshold: 120 does the work.
-  # Fallback with the patched uart: rgm-sniffer-readframe-fallback.yaml
   - source:
       type: local
       path: components
     components: [solivia]      # ships with this repo
 
 # ---------------------------------------------------------------------------
-# UART on GPIO18/19 -> module 2, wired to the Delta's own '485' port
-#   RJ45 pin 7 = A+ , pin 8 = B-   (confirmed 2026-09-09; matches the udev note)
+# The Delta's own '485' port.  RJ45 pin 7 = A+, pin 8 = B-.  38400 8N1 (NOT 9600
+# like the RGM bus).
 #
-# ⚠️ DECLARED FOR SAFETY, NOT YET USED FOR POLLING.
-# Module 2 is an auto-direction RS485 board: its D (driver input) is on GPIO18. With no
-# uart declared, GPIO18 is an unconfigured INPUT and D FLOATS -- which can spuriously
-# enable the transmitter and put noise onto the live '485' port. Declaring the uart drives
-# the pin to UART idle (mark/high), holding the module in receive.
-#
-# 38400 8N1 is the Delta's '485' rate (NOT 9600 like the RGM bus).
-# When the master role is added: pace requests at >=95-100 ms, per the pack-needs-95ms
-# finding -- that limit is a property of the device, not the topology.
+# ⚠️ Declare this uart even if you do not poll the port. The RS485 module's driver
+# input sits on GPIO18; with no uart declaring that pin it floats, which can
+# spuriously enable the transmitter onto a live bus. Declaring it drives the pin
+# to UART idle and holds the module in receive.
 uart:
   - id: uart_485
     tx_pin: GPIO18
@@ -123,47 +99,28 @@ uart:
     rx_buffer_size: 512
 
 # ---------------------------------------------------------------------------
-# RGM bus, GPIO17 — SAME wire, SAME framing as production, but through STOCK
-# ESPHome uart plus the proposed read_frame() API instead of a component that
-# owns the peripheral itself.
+# RGM bus, GPIO17. RECEIVE ONLY -- no tx_pin, no TX buffer.
 #
-#   production:  modbus_sniffer { rx_pin, uart_num: 2, baud_rate, gap_symbols: 3 }
-#   here:        uart { rx_pin, baud_rate, rx_timeout: 3, event_queue_size: 20 }
-#                + modbus_sniffer_uartapi { uart_id }
-#
-# rx_timeout: 3 is EXACTLY production's gap_symbols: 3 — same hardware register
-# (uart_set_rx_timeout), same 3.13 ms @9600, chosen between the two RTU limits.
-# No tx_pin and no tx buffer: this cannot transmit onto the RGM bus.
-#
-# event_queue_size: 20 is the opt-in. Without it read_frame() returns false and
-# supports_frame_reads() is false, i.e. stock ESPHome behaviour exactly.
-#
-# rx_full_threshold: see the note at the setting itself. It was RAISED TO 120 for EFFICIENCY
-# (at the computed default of 8, always_rx_timeout splits each frame into 7+1 events, 2.3x the
-# loop work). Correctness does not depend on it - that comes from always_rx_timeout.
+# 🛑 Never transmit here. The Delta masters this bus; a second transmitter will
+#    corrupt its control loop.
   - id: uart_rgm
     rx_pin: GPIO17
     baud_rate: 9600
     rx_buffer_size: 1024
-    # 10 symbols = ~10.4 ms @9600. RAISED FROM 3 on 2026-09-10 when the REAL pack replaced BE
-    # on this bus. BE answered fast and tightly; the real LG has inter-byte gaps that exceed
-    # 3.1 ms, so frames were being SPLIT mid-frame -- 1.5% ongoing resync and a 12% drop in
-    # published messages (546/60s vs BE's 620), with crc_bad=0 throughout because a chunk that
-    # is not a whole frame never becomes one and no CRC counter can see it. This is the
-    # esphome#17180 mechanism on our own bus.
-    # 10 sits between the two real limits: longer than any observed inter-byte gap, and well
-    # under the 28.3 ms MINIMUM inter-frame idle measured on this bus.
-    # Consequence: request+response (turnaround ~5.9 ms) now MERGE into one chunk. That is
-    # safe -- the splitter cuts merged chunks by declared length and CRC. Splitting loses data;
-    # merging does not.
+    # Idle symbols that mark a message end. 10 = ~10.4 ms @9600, chosen to sit between
+    # the two real limits on this bus: longer than any inter-byte gap the LG produces
+    # (which exceed 3 ms), and well under the 28.3 ms minimum inter-frame idle.
+    # Too short splits messages, which loses data silently -- CRC cannot see it, because
+    # a fragment never becomes a frame. Too long merges a request with its reply into one
+    # read, which is harmless: they are split again by declared length and CRC.
     rx_timeout: 10
-    # CORRECTNESS comes from uart_set_always_rx_timeout() (armed automatically when
-    # event_queue_size > 0). EFFICIENCY comes from this. They are independent knobs.
-    # At ESPHome's computed default (8 bytes @9600) always_rx_timeout withholds a byte on
-    # the FIFO-full path, so each frame arrives as 7+1 -- measured 9632 UART events for
-    # 4193 frames (2.3x), i.e. ~113 events/s vs production's ~49. That extra loop work
-    # coincided with 7 modbus response timeouts on the CO-RESIDENT '485' master, which
-    # production never showed. 120 = one event per frame; the FIFO is 128.
+    # 🔑 THE SETTING THAT MATTERS. It must exceed the longest BURST on your bus -- a
+    # request and its reply arrive together whenever rx_timeout is longer than the
+    # turnaround, so size against request + longest reply, not one frame.
+    # Below that, the FIFO-full interrupt trips mid-burst and frames arrive merged or
+    # split. Above it, bytes reach the ring buffer only at the hardware idle timeout, in
+    # whole-frame units, no matter how busy the loop is. ESPHome caps this at 120 and the
+    # ESP32 FIFO is 128.
     rx_full_threshold: 120
 
 
@@ -179,12 +136,12 @@ modbus_rtu_sniffer:
 #
 # 🔴 READ ONLY. Only `sensor` platforms are declared — no number/output/switch —
 #    so nothing here can write to the inverter.
-# 🔑 command_throttle: 100ms  — the >=95 ms per-device pacing established on the
-#    LG (pack-needs-95ms-between-requests). Do not lower it.
+# 🔑 command_throttle: 100ms — these devices need >=95 ms between requests or they
+#    start dropping replies. It is a property of the hardware, not of the bus
+#    topology, and it applies per device. Do not lower it.
 # ⚠️ SunSpec values come with a separate SCALE FACTOR register (an int16 power of
-#    ten). Both raw value AND its SF are published so the consumer can scale
-#    correctly; the SFs are NOT assumed here because this port has never been
-#    read from this device before.
+#    ten). Both the raw value AND its SF are published, so the consumer applies the
+#    scaling. The SFs are deliberately not assumed here.
 # ===========================================================================
 modbus:
   - id: mb485
@@ -199,16 +156,11 @@ modbus_controller:
     update_interval: 10s
     setup_priority: -10
 
-# TEMPORARY, 2026-09-18: measure this device's actual loop-time TAIL.
-# The question is whether millis()-based framing could work on this bus at all, given the device
-# also runs the '485' master on UART1 at 38400 plus ~70 MQTT sensors. The bus's MINIMUM inter-frame
-# idle is 28.3 ms, so any loop iteration longer than that would straddle a frame boundary.
-# debug's loop_time publishes the MAX since the last update (see debug_component.cpp: max_loop_time_
-# then reset), which is the statistic that matters -- an average would hide exactly the tail we are
-# looking for. ESPHome's own "took a long time" warning only fires above 140 ms, so it cannot see
-# the 28-140 ms band, which is the band in question.
+# Loop-time diagnostic. debug's loop_time reports the MAXIMUM iteration since the last
+# update, not an average -- the tail is what matters on a board doing several jobs.
+# Useful for seeing whether a polling component is blocking the loop.
 debug:
-  update_interval: 1s    # max loop time PER SECOND: separates the ~4 s solivia stall from the baseline
+  update_interval: 1s
 
 sensor:
   - platform: debug
@@ -401,7 +353,6 @@ sensor:
     value_type: S_WORD
     state_topic: "delta/485/sensor/wh_total_sf/state"
 
-  # --- completing the tty3 dashboard set (added 2026-09-10) ---
   # 1=off 2=sleeping 3=starting 4=MPPT running 5=throttled
   - platform: modbus_controller
     modbus_controller_id: delta485
@@ -429,7 +380,7 @@ sensor:
     register_type: holding
     value_type: U_WORD
     state_topic: "delta/485/sensor/evt1_hi/state"
-  # SIGNED watts 1:1, +chg / -dis (identified 2026-09-04, r=0.9933 vs 50094*50095)
+  # SIGNED watts, scale 1:1. Positive = charging, negative = discharging.
   - platform: modbus_controller
     modbus_controller_id: delta485
     name: "delta battery DC power"
@@ -620,12 +571,9 @@ sensor:
     update_interval: never      # published by sol_pv2_a's on_value - see below
     state_topic: "delta/485/sensor/pv_total_w/state"
 
-  # grid_hz REMOVED 2026-09-10: identical information is already on the Modbus side as
-  # hz_raw/hz_sf (SunSpec), which cost nothing extra because that poll happens anyway.
-  # Dropping it takes SOLIVIA from 6 values to 5 = -17% '485' traffic for no loss.
-  # NOTE: this was the cross-protocol check that validated the SOLIVIA decode
-  # (SOLIVIA 59.97 vs SunSpec 59.99). That validation is already recorded; if it ever needs
-  # repeating, add the sensor back temporarily rather than trusting memory.
+  # SOLIVIA also reports grid frequency, but it is deliberately not polled here: SunSpec
+  # already gives it as hz_raw/hz_sf in a poll that happens anyway, so the SOLIVIA copy is
+  # pure extra '485' traffic. The two agreed when compared (59.97 vs 59.99).
   - platform: modbus_rtu_sniffer
     modbus_rtu_sniffer_id: sniff
     address: 0x0F
@@ -1313,10 +1261,13 @@ solivia:
   id: sol485
   uart_id: uart_485
   address: 1
-  # burst 2 + 4 s interval == the old 1 + 2 s in bus load (0.5 req/s) and in refresh
-  # period (12 s per value), but each V/A PAIR is now polled ~100 ms apart instead of
-  # 2 s apart. Sensor declaration order below is what pairs them: pv1_v,pv1_a |
-  # pv2_v,pv2_a | dcbus_v,grid_hz. Do not reorder without re-checking the pairing.
+  # burst: 2 sends two requests ~100 ms apart, then waits update_interval. That keeps
+  # each V/A PAIR sampled close together, which matters because V x A is multiplied
+  # below -- sampling them 2 s apart smears the derived power across a changing load.
+  # ⚠️ The pairing comes from SENSOR DECLARATION ORDER above, nothing else:
+  #        pv1_v,pv1_a | pv2_v,pv2_a | dcbus_v
+  # Reordering or inserting a sensor re-pairs them silently. Re-check if you edit.
+  # Bus cost is 0.5 requests/s and each value refreshes every 12 s.
   burst: 2
   update_interval: 4s
 
