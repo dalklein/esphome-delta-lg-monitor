@@ -108,6 +108,15 @@ uart:
 #
 # 🛑 Never transmit here. The Delta masters this bus; a second transmitter will
 #    corrupt its control loop.
+#
+# ⚖️ NOT the same case as GPIO18 above, and the difference is worth keeping straight.
+#    GPIO18 DRIVES the '485' module's driver input, so it must be declared even when
+#    that port is not polled — an undriven DI can float and key the transmitter onto a
+#    live bus. GPIO17 only RECEIVES: the RGM module's RO drives it, and no ESP pin
+#    reaches that module's DI at all. So a config that omits this uart entirely (a
+#    PV-only build with no battery to sniff) leaves GPIO17 as an unconfigured input
+#    and creates NO risk to the RGM bus. Omitting the '485' uart would not be safe;
+#    omitting this one is.
   - id: uart_rgm
     rx_pin: GPIO17
     baud_rate: 9600
