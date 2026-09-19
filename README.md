@@ -5,6 +5,9 @@ and an **LG RESU10H-Prime** battery over RS485, on a single ESP32. Publishes ~70
 
 It **never transmits on the battery bus** — that side is receive-only, by wiring and by config.
 
+**New to ESPHome?** Start with **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)** — a
+step-by-step build with nothing assumed.
+
 ## The buses
 
 A Delta E-series normally has **two** RS485 buses, and they are easy to confuse. This project uses
