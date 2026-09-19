@@ -81,11 +81,21 @@ when not polling.
 
 ```yaml
 external_components:
-  - source: github://dalklein/esphome-modbus-rtu-sniffer
+  - source: github://dalklein/esphome-modbus-rtu-sniffer@v1.1.0
     components: [modbus_rtu_sniffer]
   - source: github://dalklein/esphome-delta-lg-monitor
     components: [solivia]
 ```
+
+🔑 **Note the `@v1.1.0`.** Without a ref, `external_components` tracks the component repo's
+default branch, so any push there arrives on your next build once the ~1 day cache expires —
+an upstream change landing in firmware you flash to a live device, with nobody choosing it.
+Pin it and move the pin deliberately. (ESPHome keys its cache by URL *and* ref, so changing
+the ref fetches fresh rather than reusing the old checkout. Clearing `.esphome/` forces a
+refetch if you ever need one.)
+
+`solivia` is left unpinned above because it ships from *this* repo — the one you already
+cloned — so it moves only when you pull.
 
 Copy `secrets.yaml.example` to `secrets.yaml`, fill it in, then `esphome run delta-monitor.yaml`.
 
