@@ -73,7 +73,12 @@ mqtt:
             else if (x == "on") id(sw_485_poll).turn_on();
 
 external_components:
-  - source: github://dalklein/esphome-modbus-rtu-sniffer
+  # 🔑 PINNED. Without a `ref:` this tracks the component repo's default branch, so any
+  # push there lands here on the next build once the ~1 day cache expires -- an upstream
+  # change arriving with no action on your part, in a config that flashes a live device.
+  # Pin to a tag and move it deliberately. ESPHome keys its cache by (url, ref), so
+  # switching the ref fetches fresh rather than reusing the old checkout.
+  - source: github://dalklein/esphome-modbus-rtu-sniffer@v1.1.0
     components: [modbus_rtu_sniffer]
   - source:
       type: local
