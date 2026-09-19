@@ -46,6 +46,30 @@ bool Solivia::transact_(uint8_t cmd, uint8_t sub, uint16_t &value_out) {
   this->write_array(frame, sizeof(frame));
   this->flush();
 
+  // 🛑 DO NOT MAKE THIS NON-BLOCKING. Tried and reverted 2026-09-19.
+  //
+  // The busy-wait below looks like a lazy end-of-frame detector that could be replaced
+  // with a loop()-driven state machine -- the reply IS self-delimiting (ETX + valid CRC),
+  // so on paper nothing needs waiting out. That refactor compiles, drops the loop stall
+  // from 154 ms to 23 ms p99, and BREAKS THE COMPONENT COMPLETELY: ok=0 fail=50.
+  //
+  // The reason is that `modbus` (id mb485, the SunSpec client) is a UARTDevice on this
+  // SAME uart. ESPHome has no arbitration between two UARTDevices sharing one port --
+  // whichever reads first gets the bytes. Blocking here is what keeps modbus's loop()
+  // from running between our request and our reply and swallowing it. The busy-wait is
+  // an accidental mutex, and it is load-bearing.
+  //
+  // Evidence: with the state machine in place, modbus logged 97 buffer-clear warnings in
+  // 150 s (against ~35 normally) while solivia recorded zero successful transactions.
+  //
+  // The stall it costs is ~150 ms per burst, ~25% of seconds. That is tolerable: the RGM
+  // sniffer is immune to it (rx_full_threshold 120 means the hardware delivers whole
+  // frames straight through a blocked loop -- measured pollcarry=0 across ~14,000 frames),
+  // and the modbus client on this port re-polls on its own schedule.
+  //
+  // A real fix needs arbitration -- either the two protocols on separate UARTs, or a
+  // shared bus-owner that both components ask before reading.
+
   // Collect until 50 ms of silence, capped at 300 ms overall.
   uint8_t buf[128];
   size_t n = 0;
