@@ -54,6 +54,11 @@ the device **always NAKs** an unsupported command — so **silence means a comms
 * **Delta E6-TL-US** inverter — E4/E8/E10-TL-US should work
 * **LG RESU Prime 10H** battery — 16H should work
 
+![Delta E6-TL-US communication ports: two RJ45 jacks labelled Ethernet/485 and CAN/485, and the green RGM terminal block below them](docs/E6-TL-US_comm_ports.jpg)
+
+Where the two buses land on an E6-TL-US: the green **RGM** terminal block, and the **'485'** port —
+either RJ45 works, pin 7 = A+, pin 8 = B−.
+
 ```
 ESP32-WROOM-32 (esp32dev, esp-idf)
   UART2  GPIO17 RX only  ->  RGM bus, 9600 8N1      (no tx_pin, no TX buffer)
