@@ -1313,6 +1313,35 @@ sensor:
     name: "meter W_SF"
     id: mtr_40022
     state_topic: "delta/rgm/sensor/mtr_w_sf/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x02
+    register: 40002
+    value_type: S_WORD
+    name: "meter A total raw"
+    id: mtr_40002
+    state_topic: "delta/rgm/sensor/mtr_a_raw/state"
+  # Phase voltages. V_SF is a fixed -1 on this meter (0.1 V per count), so 120 V
+  # should appear here as ~1200. Worth having on the wire rather than trusting the
+  # datasheet: the current registers above are derived by dividing watts by THIS
+  # value, so whether it is 120 or 1200 decides the scaling of 40002/40003/40004.
+  # The Delta reads 40008 about every 54 s, so this costs nothing on the bus.
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x02
+    register: 40008
+    value_type: U_WORD
+    name: "meter PhVphA raw"
+    id: mtr_40008
+    state_topic: "delta/rgm/sensor/mtr_phvpha_raw/state"
+  - platform: modbus_rtu_sniffer
+    modbus_rtu_sniffer_id: sniff
+    address: 0x02
+    register: 40009
+    value_type: U_WORD
+    name: "meter PhVphB raw"
+    id: mtr_40009
+    state_topic: "delta/rgm/sensor/mtr_phvphb_raw/state"
 
 
 # ===========================================================================
