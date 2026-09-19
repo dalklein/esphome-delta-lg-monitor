@@ -126,13 +126,13 @@ string voltage and current per MPPT, via SunSpec and SOLIVIA.
 `docs/LG_RESU_Prime_register_map.ods` — the LG read/write registers, the Delta '485' register list,
 the SOLIVIA command map, and the learnings behind them.
 
-## Related, not published
+## Related
 
-A companion project puts an ESP32 **in series with the grid connection meter** — the third bus described above — and steers charge and discharge by offsetting what the inverter sees as grid power flow.
+A companion project puts an ESP32 **in series with the grid connection meter** — creating the third bus described above — and steers charge and discharge by offsetting what the inverter sees as grid power flow.
 
 That is a different category of thing from this repo: it **transmits**, it **changes inverter
 behaviour**, and it means cutting into the meter run. Worth being deliberate about on a grid-tied
-system. Not published here.
+system. https://github.com/dalklein/esphome-delta-acrel-mitm
 
 ## Credits
 
