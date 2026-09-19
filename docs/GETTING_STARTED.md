@@ -72,9 +72,42 @@ cd esphome-delta-lg-monitor
     components: [solivia]
 ```
 
-A local path only resolves if the files are on your disk, next to the YAML. (The other
-component, `modbus_rtu_sniffer`, *is* fetched from GitHub automatically — pinned at
-`@v1.1.0` — so you do not need to download that one yourself.)
+A local path only resolves if the files are on your disk, next to the YAML.
+
+### The other component, and what `@v1.1.0` means
+
+The second component, `modbus_rtu_sniffer`, you do **not** download — ESPHome fetches it for
+you at build time:
+
+```yaml
+  - source: github://dalklein/esphome-modbus-rtu-sniffer@v1.1.0
+    components: [modbus_rtu_sniffer]
+```
+
+The `@v1.1.0` on the end is a **tag** — a permanent label on one specific snapshot of that
+repo, frozen at a moment in time. It says "use exactly this version", not "use whatever is
+newest".
+
+**Leave it as it is.** `v1.1.0` is the version the author runs against a real inverter and
+battery, and it is known to work. You do not need to change it to get started.
+
+It is worth understanding *why* it is there, though, because it is the difference between a
+build you control and one you don't. Without the `@v1.1.0` part, ESPHome would follow the
+newest code on that repo's main branch. Someone could push a change tomorrow, and your very
+next build would quietly pick it up — new code arriving in firmware you are about to flash
+onto hardware wired into a live solar and battery system, with nobody having decided that
+should happen. Naming a version means the code only changes when *you* change that line.
+
+This is also why the component is versioned at all: it is still being developed, so it
+genuinely does change. `v1.0.0` and `v1.1.0` are two such snapshots. Pinning lets the author
+keep improving it without that work landing unannounced in your build.
+
+If you ever do move to a different version, delete the cached copy afterwards so the new one
+is actually fetched:
+
+```bash
+rm -rf .esphome/external_components
+```
 
 ---
 
