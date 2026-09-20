@@ -4,7 +4,7 @@ ESPHome config for monitoring a **Delta E-series hybrid inverter** E(4/6/8/10)-T
 and an **LG RESU10H-Prime** battery over RS485, on a single ESP32. Publishes ~70 battery registers and the inverter telemetry to MQTT / Home Assistant.  
 This may work to monitor an M(4/6/8/10)-TL-US PV only inverter.
 
-It **never transmits on the battery bus** — that side is receive-only, by wiring and by config.
+It **never transmits on the battery & meter bus** — that side is receive-only, by wiring and by config.
 
 **New to ESPHome?** Start with **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)** — a
 step-by-step build with nothing assumed.
@@ -12,8 +12,11 @@ step-by-step build with nothing assumed.
 ## The buses
 
 A Delta E-series normally has **two** RS485 buses. This project uses both.
-An M-series PV inverter would not be using the RGM bus; no battery or grid meter.
 RGM = revenue grade meter, used for inverter & battery modes to control inflow/outflow.
+
+⚠️ Unverified on M-series: whether it exposes the RGM connector, or the firmware behind it.
+A PV-only inverter can legitimately use a grid meter for export limiting, so don't assume
+the bus is absent — look before concluding the '485' port is all you get.
 
 | | **RGM bus** | **the Delta's '485' port** |
 |---|---|---|
