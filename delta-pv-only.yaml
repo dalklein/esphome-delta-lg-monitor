@@ -1,0 +1,659 @@
+# ============================================================================
+# Delta inverter monitor — '485' PORT ONLY. No battery, one RS485 bus.
+#
+# A cut-down variant of delta-monitor.yaml for a PV-only installation: it polls
+# the inverter's own '485' port and nothing else. The RGM bus sniffer, the LG
+# RESU battery registers and the revenue-meter decode are all removed, because
+# all three live on the RGM bus, which a PV-only system does not use.
+#
+# 🔴 UNTESTED. This variant has never been run against any inverter. It is the
+#    tested delta-monitor.yaml with the RGM half deleted — nothing was rewritten
+#    — but "it compiles" is not "it works". Nobody here owns a PV-only or
+#    M-series Delta to try it on.
+#
+# 🔴 M-SERIES IS AN ASSUMPTION, NOT A CLAIM. This was written because an
+#    M-series owner asked. Whether an M-series exposes a '485' port at all, at
+#    the same baud rate, at address 1, with the same SunSpec layout and the same
+#    SOLIVIA support, is unknown. If it does not, expect silence rather than
+#    wrong readings — see "If you get nothing" below.
+#
+#   ESP32-WROOM-32, board esp32dev, framework esp-idf
+#
+#   UART1 / GPIO18 TX, GPIO19 RX
+#                   the Delta's own '485' port, 38400 8N1, Delta is the slave
+#                   at address 1. This board masters it.
+#                   RJ45 pin 7 = A+, pin 8 = B−.
+#
+#   GPIO17 is unused in this variant. Only ONE RS485-TTL module is needed.
+#
+# MQTT TOPICS are set explicitly on every entity, since ESPHome's topic_prefix
+# is per-device:
+#     delta/485/...   the Delta's own port (inverter telemetry)
+# Birth, will and log topics are set explicitly too, or they would land on a bare
+# "delta/status".
+#
+# IF YOU GET NOTHING: the '485' port has no master until this board becomes one,
+# so silence is the expected symptom of every wiring or addressing mistake, and
+# it looks identical to "this inverter does not speak it". Check in this order:
+#   1. delta/485/status reads "online"      -> the board is on your network
+#   2. swap A+/B− at the RJ45               -> harmless, and the usual cause
+#   3. confirm the inverter is Modbus addr 1 -> see its own display/manual
+#   4. only then conclude the protocol differs on your model
+# ============================================================================
+
+esphome:
+  # The name sets the mDNS/OTA hostname and the MQTT client id. It does NOT affect
+  # the MQTT topics, which are set explicitly on every entity below.
+  name: delta-pv-only
+  friendly_name: Delta PV Only Monitor
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+  level: INFO
+  baud_rate: 0          # free UART0; logs go over WiFi/MQTT
+
+wifi:
+  networks:
+    - ssid: !secret wifi_ssid_g
+      password: !secret wifi_password
+    - ssid: !secret wifi_ssid
+      password: !secret wifi_password
+  ap:
+    ssid: "Delta Inverter Fallback"
+    password: !secret ap_password
+
+captive_portal:
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+mqtt:
+  broker: !secret mqtt_broker_ip
+  port: 1883
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  topic_prefix: "delta"
+  birth_message:
+    topic: "delta/485/status"
+    payload: "online"
+  will_message:
+    topic: "delta/485/status"
+    payload: "offline"
+  log_topic:
+    topic: "delta/485/debug"
+  on_disconnect:
+    - logger.log: "MQTT broker unavailable, continuing to poll."
+  on_message:
+    - topic: "delta/485/cmd/poll"
+      then:
+        - lambda: |-
+            if (x == "off") id(sw_485_poll).turn_off();
+            else if (x == "on") id(sw_485_poll).turn_on();
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [solivia]      # ships with this repo
+
+# ---------------------------------------------------------------------------
+# The Delta's own '485' port.  RJ45 pin 7 = A+, pin 8 = B-.  38400 8N1 (NOT 9600
+# like the RGM bus on the full two-bus config).
+#
+# ⚠️ Declare this uart even if you do not poll the port. The RS485 module's driver
+# input sits on GPIO18; with no uart declaring that pin it floats, which can
+# spuriously enable the transmitter onto a live bus. Declaring it drives the pin
+# to UART idle and holds the module in receive.
+uart:
+  - id: uart_485
+    tx_pin: GPIO18
+    rx_pin: GPIO19
+    baud_rate: 38400
+    stop_bits: 1
+    data_bits: 8
+    parity: NONE
+    rx_buffer_size: 512
+
+# ---------------------------------------------------------------------------
+# NO RGM UART HERE, and that is safe. The full two-bus config declares a
+# receive-only uart on GPIO17 for the RGM bus (battery + meter), which this
+# PV-only build has no use for.
+#
+# ⚖️ Do NOT copy the reasoning from the '485' uart above. GPIO18 DRIVES that
+#    module's driver input, so it must be declared even when the port is not
+#    polled -- an undriven DI can float and key the transmitter onto a live bus.
+#    GPIO17 only RECEIVES: the RGM module's RO drives it, and no ESP pin is
+#    CONFIGURED to reach that module's DI. Leaving GPIO17 unconfigured is
+#    therefore an input with no driver, and puts nothing at risk on the bus the
+#    inverter masters. GPIO17 is simply unused in this build.
+#
+#    Two same-looking uart blocks, opposite hazards. Worth keeping straight.
+#
+# ✅ CONFIRMED BY THE OWNER, 2026-09-19: on this installation the RGM side is wired
+#    listen-only, and the ESP pin that would transmit onto that bus is PHYSICALLY
+#    UNCONNECTED. So the config-level claim above is backed by the hardware, not just
+#    by the absence of a tx_pin.
+#
+#    The wording stays "no ESP pin is CONFIGURED to reach that module's DI" on purpose:
+#    that stays true if the board is ever rewired, whereas a bare "it is unconnected"
+#    would silently go stale. Re-check the wiring if the hardware changes -- and note
+#    the confirmation is for THAT board, not for yours.
+#
+#    Supporting evidence, weaker but independent: months of the Delta mastering this
+#    bus with crc_bad=0 across millions of sniffed frames. Operational rather than
+#    observational -- it would show a transmitter misbehaving NOW, but only inspection
+#    could show it cannot.
+
+# ===========================================================================
+# '485' PORT MASTER — the Delta's own SunSpec/Modbus-RTU slave port (addr 1)
+#
+# Stock ESPHome modbus + modbus_controller: this half of the dashboard is plain
+# Modbus RTU FC03, so there is no reason to hand-roll it.
+#
+# 🔴 READ ONLY. Only `sensor` platforms are declared — no number/output/switch —
+#    so nothing here can write to the inverter.
+# 🔑 BUS SPACING, and nothing in this file sets it. These devices need >=95 ms between
+#    requests or they start dropping replies — a property of the hardware, not of the
+#    topology, and it applies per device. That floor is supplied by the `modbus` hub's
+#    `turnaround_time`, which DEFAULTS TO 600 ms — six times wider than needed, and
+#    measured 2026-09-19 on the full two-bus config to still let all 45 '485' sensors
+#    meet their update_interval. This variant keeps those same 45 and drops the RGM
+#    half, so it asks strictly less of the same hub.
+#    ⚠️ `command_throttle` on the controller is INERT since 2026.8 and is removed in
+#    2027.2.0. If you ever need the bus tighter, set `turnaround_time` on the hub above,
+#    and never below the 95 ms floor.
+# ⚠️ SunSpec values come with a separate SCALE FACTOR register (an int16 power of
+#    ten). Both the raw value AND its SF are published, so the consumer applies the
+#    scaling. The SFs are deliberately not assumed here.
+# ===========================================================================
+modbus:
+  - id: mb485
+    uart_id: uart_485
+    role: client
+
+modbus_controller:
+  - id: delta485
+    address: 1
+    modbus_id: mb485
+    update_interval: 10s
+    setup_priority: -10
+
+# Loop-time diagnostic. debug's loop_time reports the MAXIMUM iteration since the last
+# update, not an average -- the tail is what matters on a board doing several jobs.
+# Useful for seeing whether a polling component is blocking the loop.
+debug:
+  update_interval: 1s
+
+sensor:
+  - platform: debug
+    loop_time:
+      name: "485 Loop Time"
+      id: loop_time_485
+      state_topic: "delta/485/sensor/loop_time/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta ac current"
+    id: d485_ac_a_raw
+    address: 40071
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/ac_a_raw/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta ac current sf"
+    id: d485_ac_a_sf
+    address: 40075
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/ac_a_sf/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta voltage L1-L2"
+    id: d485_v_l1l2_raw
+    address: 40076
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/v_l1l2_raw/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta voltage L1"
+    id: d485_v_l1_raw
+    address: 40079
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/v_l1_raw/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta voltage L2"
+    id: d485_v_l2_raw
+    address: 40080
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/v_l2_raw/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta voltage sf"
+    id: d485_v_sf
+    address: 40082
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/v_sf/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta ac power"
+    id: d485_ac_w_raw
+    address: 40083
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/ac_w_raw/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta ac power sf"
+    id: d485_ac_w_sf
+    address: 40084
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/ac_w_sf/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta frequency"
+    id: d485_hz_raw
+    address: 40085
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/hz_raw/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta frequency sf"
+    id: d485_hz_sf
+    address: 40086
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/hz_sf/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta apparent power"
+    id: d485_va_raw
+    address: 40087
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/va_raw/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta apparent power sf"
+    id: d485_va_sf
+    address: 40088
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/va_sf/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta reactive power"
+    id: d485_var_raw
+    address: 40089
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/var_raw/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta reactive power sf"
+    id: d485_var_sf
+    address: 40090
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/var_sf/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta power factor"
+    id: d485_pf_raw
+    address: 40091
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/pf_raw/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta power factor sf"
+    id: d485_pf_sf
+    address: 40092
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/pf_sf/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta heatsink temp"
+    id: d485_temp_raw
+    address: 40102
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/temp_raw/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta temp sf"
+    id: d485_temp_sf
+    address: 40106
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/temp_sf/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta meter power"
+    id: d485_meter_w
+    address: 49991
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/meter_w/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta battery charge W"
+    id: d485_batt_chg_w
+    address: 49998
+    register_type: holding
+    value_type: U_WORD
+    state_topic: "delta/485/sensor/batt_chg_w/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta battery discharge W"
+    id: d485_batt_dis_w
+    address: 49999
+    register_type: holding
+    value_type: U_WORD
+    state_topic: "delta/485/sensor/batt_dis_w/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta lifetime energy"
+    id: d485_wh_total
+    address: 40093
+    register_type: holding
+    value_type: U_DWORD
+    state_topic: "delta/485/sensor/wh_total_raw/state"
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta lifetime energy sf"
+    id: d485_wh_sf
+    address: 40095
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/wh_total_sf/state"
+
+  # 1=off 2=sleeping 3=starting 4=MPPT running 5=throttled
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta inverter state"
+    id: d485_state
+    address: 40107
+    register_type: holding
+    value_type: U_WORD
+    state_topic: "delta/485/sensor/state/state"
+  # SunSpec Evt1 low word
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta event flags lo"
+    id: d485_evt1_lo
+    address: 40109
+    register_type: holding
+    value_type: U_WORD
+    state_topic: "delta/485/sensor/evt1_lo/state"
+  # SunSpec Evt1 high word
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta event flags hi"
+    id: d485_evt1_hi
+    address: 40110
+    register_type: holding
+    value_type: U_WORD
+    state_topic: "delta/485/sensor/evt1_hi/state"
+  # SIGNED watts, scale 1:1. Positive = charging, negative = discharging.
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta battery DC power"
+    id: d485_batt_w
+    address: 50084
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/batt_w/state"
+  # Wh
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta battery energy B"
+    id: d485_batt_wh_b
+    address: 50086
+    register_type: holding
+    value_type: U_WORD
+    state_topic: "delta/485/sensor/batt_wh_b/state"
+  # Wh
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta battery energy A"
+    id: d485_batt_wh_a
+    address: 50087
+    register_type: holding
+    value_type: U_WORD
+    state_topic: "delta/485/sensor/batt_wh_a/state"
+  # purpose not yet identified
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta batt block 50090"
+    id: d485_b50090
+    address: 50090
+    register_type: holding
+    value_type: U_WORD
+    state_topic: "delta/485/sensor/b50090/state"
+  # purpose not yet identified
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta batt block 50092"
+    id: d485_b50092
+    address: 50092
+    register_type: holding
+    value_type: U_WORD
+    state_topic: "delta/485/sensor/b50092/state"
+  # divide by 10 for volts
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta battery bus voltage"
+    id: d485_batt_bus_v
+    address: 50094
+    register_type: holding
+    value_type: U_WORD
+    state_topic: "delta/485/sensor/batt_bus_v/state"
+  # SIGNED, divide by 10 for amps
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta battery bus current"
+    id: d485_batt_bus_a
+    address: 50095
+    register_type: holding
+    value_type: S_WORD
+    state_topic: "delta/485/sensor/batt_bus_a/state"
+  # purpose not yet identified
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta batt block 50096"
+    id: d485_b50096
+    address: 50096
+    register_type: holding
+    value_type: U_WORD
+    state_topic: "delta/485/sensor/b50096/state"
+  # purpose not yet identified
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta batt block 50097"
+    id: d485_b50097
+    address: 50097
+    register_type: holding
+    value_type: U_WORD
+    state_topic: "delta/485/sensor/b50097/state"
+  # purpose not yet identified
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta batt block 50107"
+    id: d485_b50107
+    address: 50107
+    register_type: holding
+    value_type: U_WORD
+    state_topic: "delta/485/sensor/b50107/state"
+  # purpose not yet identified
+  - platform: modbus_controller
+    modbus_controller_id: delta485
+    name: "delta batt block 50116"
+    id: d485_b50116
+    address: 50116
+    register_type: holding
+    value_type: U_WORD
+    state_topic: "delta/485/sensor/b50116/state"
+
+  # --- SOLIVIA values (cmd 111), the half SunSpec cannot reach ---
+  - platform: solivia
+    solivia_id: sol485
+    name: "delta pv1 voltage"
+    id: sol_pv1_v
+    cmd: 111
+    sub: 1
+    divisor: 10.0
+    accuracy_decimals: 1   # ESPHome defaults to 0 when unset, which rounded every value to a whole number
+    state_topic: "delta/485/sensor/pv1_v/state"
+  - platform: solivia
+    solivia_id: sol485
+    name: "delta pv1 current"
+    id: sol_pv1_a
+    on_value:
+      then:
+        - lambda: |-
+            if (!isnan(id(sol_pv1_v).state))
+              id(pv1_w).publish_state(id(sol_pv1_v).state * x);
+    cmd: 111
+    sub: 2
+    divisor: 100.0
+    accuracy_decimals: 2   # ESPHome defaults to 0 when unset, which rounded every value to a whole number
+    state_topic: "delta/485/sensor/pv1_a/state"
+  - platform: solivia
+    solivia_id: sol485
+    name: "delta pv2 voltage"
+    id: sol_pv2_v
+    cmd: 111
+    sub: 11
+    divisor: 10.0
+    accuracy_decimals: 1   # ESPHome defaults to 0 when unset, which rounded every value to a whole number
+    state_topic: "delta/485/sensor/pv2_v/state"
+  - platform: solivia
+    solivia_id: sol485
+    name: "delta pv2 current"
+    id: sol_pv2_a
+    on_value:
+      then:
+        - lambda: |-
+            if (!isnan(id(sol_pv2_v).state)) {
+              float p2 = id(sol_pv2_v).state * x;
+              id(pv2_w).publish_state(p2);
+              if (!isnan(id(pv1_w).state))
+                id(pv_total_w).publish_state(id(pv1_w).state + p2);
+            }
+    cmd: 111
+    sub: 12
+    divisor: 100.0
+    accuracy_decimals: 2   # ESPHome defaults to 0 when unset, which rounded every value to a whole number
+    state_topic: "delta/485/sensor/pv2_a/state"
+  - platform: solivia
+    solivia_id: sol485
+    name: "delta dc bus voltage"
+    id: sol_dcbus_v
+    cmd: 111
+    sub: 31
+    divisor: 10.0
+    accuracy_decimals: 1   # ESPHome defaults to 0 when unset, which rounded every value to a whole number
+    state_topic: "delta/485/sensor/dcbus_v/state"
+  # --- DERIVED PV POWER --------------------------------------------------
+  # There is NO PV power register and NO PV energy counter on this inverter
+  # (SunSpec model 160 is not implemented; the vendor block has none either).
+  # Computed here rather than in Node-RED so consumers get ONE topic instead of
+  # having to join two topics that arrive ~2 s apart on the SOLIVIA cycle.
+  # isnan() guard: the source sensors are NaN until their first poll completes.
+  - platform: template
+    name: "delta pv1 power"
+    id: pv1_w
+    unit_of_measurement: W
+    device_class: power
+    accuracy_decimals: 1
+    update_interval: never      # published by sol_pv1_a's on_value - see below
+    state_topic: "delta/485/sensor/pv1_w/state"
+  - platform: template
+    name: "delta pv2 power"
+    id: pv2_w
+    unit_of_measurement: W
+    device_class: power
+    accuracy_decimals: 1
+    update_interval: never      # published by sol_pv2_a's on_value - see below
+    state_topic: "delta/485/sensor/pv2_w/state"
+  - platform: template
+    name: "delta pv total power"
+    id: pv_total_w
+    unit_of_measurement: W
+    device_class: power
+    accuracy_decimals: 1
+    update_interval: never      # published by sol_pv2_a's on_value - see below
+    state_topic: "delta/485/sensor/pv_total_w/state"
+
+  # SOLIVIA also reports grid frequency, but it is deliberately not polled here: SunSpec
+  # already gives it as hz_raw/hz_sf in a poll that happens anyway, so the SOLIVIA copy is
+  # pure extra '485' traffic. The two agreed when compared (59.97 vs 59.99).
+
+# ===========================================================================
+# BUS-SHARING HOOK for the '485' port
+#
+# Only ONE master may drive a bus. To let another master (or anything else) explore
+# the '485' port, STOP this board polling first:
+#
+#     mosquitto_pub -t delta/485/cmd/poll -m off     # release the bus
+#     mosquitto_pub -t delta/485/cmd/poll -m on      # take it back
+#
+# modbus_controller is a PollingComponent, so stop_poller() halts it cleanly at
+# a transaction boundary - no half-finished exchange left on the wire. State is
+# echoed on delta/485/status/poll so a script can confirm the bus is free
+# before transmitting.
+# ===========================================================================
+# SOLIVIA: the Delta's second protocol on the '485' port. Carries the per-string PV data
+# and DC-bus/grid values that SunSpec does not expose. Read-only by construction.
+solivia:
+  id: sol485
+  uart_id: uart_485
+  address: 1
+  # burst: 2 sends two requests ~100 ms apart, then waits update_interval. That keeps
+  # each V/A PAIR sampled close together, which matters because V x A is multiplied
+  # below -- sampling them 2 s apart smears the derived power across a changing load.
+  # ⚠️ The pairing comes from SENSOR DECLARATION ORDER above, nothing else:
+  #        pv1_v,pv1_a | pv2_v,pv2_a | dcbus_v
+  # Reordering or inserting a sensor re-pairs them silently. Re-check if you edit.
+  # Bus cost is 0.5 requests/s and each value refreshes every 12 s.
+  burst: 2
+  update_interval: 4s
+
+switch:
+  - platform: template
+    name: "delta 485 polling"
+    id: sw_485_poll
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    turn_on_action:
+      - lambda: |-
+          id(delta485)->start_poller();
+          id(sol485)->start_poller();
+          ESP_LOGI("bus485", "polling ENABLED - this board owns the '485' bus");
+      - mqtt.publish:
+          topic: "delta/485/status/poll"
+          payload: "on"
+          retain: true
+    turn_off_action:
+      - lambda: |-
+          id(delta485)->stop_poller();
+          id(sol485)->stop_poller();
+          ESP_LOGI("bus485", "polling DISABLED - '485' bus released for another master");
+      - mqtt.publish:
+          topic: "delta/485/status/poll"
+          payload: "off"
+          retain: true
+
