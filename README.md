@@ -1,7 +1,8 @@
 # esphome-delta-lg-monitor
 
 ESPHome config for monitoring a **Delta E-series hybrid inverter** E(4/6/8/10)-TL-US
-and an **LG RESU10H-Prime** battery over RS485, on a single ESP32. Publishes ~70 battery registers and the inverter telemetry to MQTT / Home Assistant.
+and an **LG RESU10H-Prime** battery over RS485, on a single ESP32. Publishes ~70 battery registers and the inverter telemetry to MQTT / Home Assistant.  
+This may work to monitor an M(4/6/8/10)-TL-US PV only inverter.
 
 It **never transmits on the battery bus** — that side is receive-only, by wiring and by config.
 
@@ -10,8 +11,9 @@ step-by-step build with nothing assumed.
 
 ## The buses
 
-A Delta E-series normally has **two** RS485 buses, and they are easy to confuse. This project uses
-both.
+A Delta E-series normally has **two** RS485 buses. This project uses both.
+An M-series PV inverter would not be using the RGM bus; no battery or grid meter.
+RGM = revenue grade meter, used for inverter & battery modes to control inflow/outflow.
 
 | | **RGM bus** | **the Delta's '485' port** |
 |---|---|---|
@@ -22,7 +24,7 @@ both.
 | protocol | LG's Modbus register map | **SunSpec** (Modbus RTU, base 40000) **+ Delta's own SOLIVIA**, on the same wire |
 | this project | **listens only** — no `tx_pin`, no TX buffer | **polls it** as master |
 
-On the RGM bus the Delta masters and does all the talking: it polls the battery and the meter, and
+On the RGM bus, the inverter is the master: it polls the battery and the meter, and
 they answer. `0x0E` is a second battery if fitted; `0x03`, `0x1E` and `0xC9` are also addressed.
 Adding a silent listener disturbs nothing.
 
@@ -34,7 +36,7 @@ listen there is correctly silent and proves nothing: you have to poll it to get 
 
 ### A third bus, if a meter MITM is used
 
-Putting a man-in-the-middle in front of the revenue meter splits the meter onto a bus of its
+Putting a man-in-the-middle in front of the grid meter splits the meter onto a bus of its
 own. The MITM answers the Delta at `0x02` as if it were the meter, and separately polls the real
 meter on the new segment:
 
@@ -45,7 +47,7 @@ meter on the new segment:
   '485' port       Delta (slave)  ←── this project polls it
 ```
 
-That is a different project and is **not** part of this repo — see "Related, not published" below.
+That is a different project and is **not** part of this repo — see "Related" below.
 If you have no MITM, there are two buses and the meter simply sits on the RGM bus.
 
 Two facts that invert how you read negatives on the '485' port, and cost real time to learn:
@@ -161,8 +163,7 @@ the SOLIVIA command map, and the learnings behind them.
 A companion project puts an ESP32 **in series with the grid connection meter** — creating the third bus described above — and steers charge and discharge by offsetting what the inverter sees as grid power flow.
 
 That is a different category of thing from this repo: it **transmits**, it **changes inverter
-behaviour**, and it means cutting into the meter run. Worth being deliberate about on a grid-tied
-system. https://github.com/dalklein/esphome-delta-acrel-mitm
+behaviour**. https://github.com/dalklein/esphome-delta-acrel-mitm
 
 ## Credits
 
