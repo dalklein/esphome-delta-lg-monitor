@@ -5,10 +5,10 @@
 #
 #   UART2 / GPIO17  RGM bus,   9600 8N1   RECEIVE ONLY
 #                   No tx_pin and no TX buffer are declared, so this firmware
-#                   physically cannot transmit onto the bus the inverter masters.
+#                   physically cannot transmit onto the bus the inverter drives.
 #   UART1 / GPIO18 TX, GPIO19 RX
-#                   the Delta's own '485' port, 38400 8N1, Delta is the slave
-#                   at address 1. This board masters it.
+#                   the Delta's own '485' port, 38400 8N1, Delta is the server
+#                   at address 1. This board is its client.
 #
 # MQTT TOPICS are set explicitly on every entity, because one device serves both
 # roles and ESPHome's topic_prefix is per-device:
@@ -106,7 +106,7 @@ uart:
 # ---------------------------------------------------------------------------
 # RGM bus, GPIO17. RECEIVE ONLY -- no tx_pin, no TX buffer.
 #
-# 🛑 Never transmit here. The Delta masters this bus; a second transmitter will
+# 🛑 Never transmit here. The Delta drives this bus; a second transmitter will
 #    corrupt its control loop.
 #
 # ⚖️ NOT the same case as GPIO18 above, and the difference is worth keeping straight.
@@ -115,7 +115,7 @@ uart:
 #    live bus. GPIO17 only RECEIVES: the RGM module's RO drives it, and no ESP pin is
 #    CONFIGURED to reach that module's DI. So a config that omits this uart entirely
 #    (a PV-only build with no battery to sniff) leaves GPIO17 as an unconfigured input
-#    and puts nothing at risk on the bus the inverter masters. Omitting the '485' uart
+#    and puts nothing at risk on the bus the inverter drives. Omitting the '485' uart
 #    would not be safe; omitting this one is.
 #
 # ✅ CONFIRMED BY INSPECTION, 2026-09-19 (user looked at the board): the RGM side is
@@ -127,7 +127,7 @@ uart:
 #    that remains true if the board is ever rewired, whereas a bare "it is unconnected"
 #    would silently go stale. Re-check the wiring if the hardware changes.
 #
-#    Supporting evidence, weaker but independent: months of the Delta mastering this
+#    Supporting evidence, weaker but independent: months of the Delta driving this
 #    bus with crc_bad=0 across millions of sniffed frames. Operational rather than
 #    observational -- it would show a transmitter misbehaving NOW, but only inspection
 #    could show it cannot.
@@ -157,7 +157,7 @@ modbus_rtu_sniffer:
   uart_id: uart_rgm
 
 # ===========================================================================
-# '485' PORT MASTER — the Delta's own SunSpec/Modbus-RTU slave port (addr 1)
+# '485' PORT CLIENT — the Delta's own SunSpec/Modbus-RTU server port (addr 1)
 #
 # Stock ESPHome modbus + modbus_controller: this half of the dashboard is plain
 # Modbus RTU FC03, so there is no reason to hand-roll it.
@@ -1379,7 +1379,7 @@ sensor:
 # ===========================================================================
 # BUS-SHARING HOOK for the '485' port
 #
-# Only ONE master may drive a bus. To let another master (or anything else) explore
+# Only ONE client may drive a bus. To let another client (or anything else) explore
 # the '485' port, STOP this board polling first:
 #
 #     mosquitto_pub -t delta/485/cmd/poll -m off     # release the bus
@@ -1426,7 +1426,7 @@ switch:
       - lambda: |-
           id(delta485)->stop_poller();
           id(sol485)->stop_poller();
-          ESP_LOGI("bus485", "polling DISABLED - '485' bus released for another master");
+          ESP_LOGI("bus485", "polling DISABLED - '485' bus released for another client");
       - mqtt.publish:
           topic: "delta/485/status/poll"
           payload: "off"

@@ -10,14 +10,14 @@
 #    the same SunSpec/SOLIVIA, is unknown. Expect silence, not wrong values.
 #
 #   ESP32-WROOM-32 (esp32dev, esp-idf)
-#   UART1  GPIO18 TX / GPIO19 RX -> Delta '485', 38400 8N1, Delta is slave addr 1
+#   UART1  GPIO18 TX / GPIO19 RX -> Delta '485', 38400 8N1, Delta is server addr 1
 #          RJ45 pin 7 = A+, pin 8 = B−
 #   GPIO17 unused. Only ONE RS485-TTL module is needed.
 #
 # MQTT topics are set per entity (delta/485/...), as are birth/will/log, because
 # ESPHome's topic_prefix is per-device.
 #
-# NO DATA? The '485' port has no master until this board becomes one, so silence is
+# NO DATA? The '485' port has no client until this board becomes one, so silence is
 # the symptom of every mistake. Check delta/485/status = online, swap A+/B−, confirm
 # Modbus address 1 — then suspect the model.
 # ============================================================================
@@ -110,7 +110,7 @@ uart:
 # Two same-looking uart blocks, opposite hazards.
 
 # ===========================================================================
-# '485' PORT MASTER — the Delta's own SunSpec/Modbus-RTU slave port (addr 1)
+# '485' PORT CLIENT — the Delta's own SunSpec/Modbus-RTU server port (addr 1)
 #
 # Stock ESPHome modbus + modbus_controller: this half of the dashboard is plain
 # Modbus RTU FC03, so there is no reason to hand-roll it.
@@ -561,7 +561,7 @@ sensor:
 # ===========================================================================
 # BUS-SHARING HOOK for the '485' port
 #
-# Only ONE master may drive a bus. To let another master (or anything else) explore
+# Only ONE client may drive a bus. To let another client (or anything else) explore
 # the '485' port, STOP this board polling first:
 #
 #     mosquitto_pub -t delta/485/cmd/poll -m off     # release the bus
@@ -607,7 +607,7 @@ switch:
       - lambda: |-
           id(delta485)->stop_poller();
           id(sol485)->stop_poller();
-          ESP_LOGI("bus485", "polling DISABLED - '485' bus released for another master");
+          ESP_LOGI("bus485", "polling DISABLED - '485' bus released for another client");
       - mqtt.publish:
           topic: "delta/485/status/poll"
           payload: "off"
