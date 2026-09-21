@@ -128,7 +128,7 @@ void Solivia::update() {
   //
   // Bus load is UNCHANGED: pair the sensors and double update_interval, and it is still the same
   // number of requests per second and the same refresh period per value. That matters because the
-  // '485' UART is shared with the Modbus master and already loses 7-9% of SOLIVIA polls when the
+  // '485' UART is shared with the Modbus client and already loses 7-9% of SOLIVIA polls when the
   // inverter is working hard. Declare V immediately before its A so they land in the same burst.
   // NEVER WRAP MID-BURST. If the burst would run off the end of the list, poll only to the
   // end and restart at 0 next tick. Without this, an ODD item count makes the grouping DRIFT:

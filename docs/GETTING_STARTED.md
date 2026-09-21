@@ -187,7 +187,7 @@ either RJ45 (pin 7 = A+, pin 8 = B−).
 
 Both RS485 modules take 3.3 V and GND from the ESP32.
 
-> 🛑 **Never transmit on the RGM bus.** The inverter is the master there, and a second
+> 🛑 **Never transmit on the RGM bus.** The inverter is the client there, and a second
 > transmitter will corrupt its control loop. This firmware is built so it *cannot* — the
 > RGM UART declares no `tx_pin` and no transmit buffer. Do not add one.
 

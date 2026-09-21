@@ -23,19 +23,19 @@ all you get.
 |---|---|---|
 | where | green RGM terminal block | either RJ45 — pin 7 = A+, pin 8 = B− |
 | speed | 9600 8N1 | **38400 8N1**, address 1 |
-| who is master | **the Delta** | **nobody** — the Delta is a *slave* here |
+| who is client | **the Delta** | **nobody** — the Delta is a *server* here |
 | who else is on it | LG RESU at `0x0F`, revenue meter at `0x02` | just the Delta |
 | protocol | LG's Modbus register map | **SunSpec** (Modbus RTU, base 40000) **+ Delta's own SOLIVIA**, on the same wire |
-| this project | **listens only** — no `tx_pin`, no TX buffer | **polls it** as master |
+| this project | **listens only** — no `tx_pin`, no TX buffer | **polls it** as client |
 
-On the RGM bus, the inverter is the master: it polls the battery and the meter, and
+On the RGM bus, the inverter is the client: it polls the battery and the meter, and
 they answer. `0x0E` is a second battery if fitted; `0x03`, `0x1E` and `0xC9` are also addressed.
 Adding a silent listener disturbs nothing.
 
-The '485' port is the opposite situation — nobody masters it until you do. That is why a passive
+The '485' port is the opposite situation — nobody drives it until you do. That is why a passive
 listen there is correctly silent and proves nothing: you have to poll it to get anything.
 
-> 🛑 **Never transmit on the RGM bus.** The Delta masters it, and a second transmitter will corrupt
+> 🛑 **Never transmit on the RGM bus.** The Delta drives it, and a second transmitter will corrupt
 > its control loop.
 
 ### A third bus, if a meter MITM is used
@@ -45,10 +45,10 @@ own. The MITM answers the Delta at `0x02` as if it were the meter, and separatel
 meter on the new segment:
 
 ```
-  RGM bus          Delta (master) ─── LG RESU 0x0F
+  RGM bus          Delta (client) ─── LG RESU 0x0F
                                   └── MITM answering as the meter 0x02
-  meter segment    MITM (master) ──── real revenue meter 0x02
-  '485' port       Delta (slave)  ←── this project polls it
+  meter segment    MITM (client) ──── real revenue meter 0x02
+  '485' port       Delta (server) ←── this project polls it
 ```
 
 That is a different project and is **not** part of this repo — see "Related" below.
