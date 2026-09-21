@@ -1,44 +1,25 @@
 # ============================================================================
-# Delta inverter monitor — '485' PORT ONLY. No battery, one RS485 bus.
+# Delta inverter monitor — '485' PORT ONLY. One RS485 bus, no battery.
 #
-# A cut-down variant of delta-monitor.yaml for a PV-only installation: it polls
-# the inverter's own '485' port and nothing else. The RGM bus sniffer, the LG
-# RESU battery registers and the revenue-meter decode are all removed, because
-# all three live on the RGM bus, which a PV-only system does not use.
+# delta-monitor.yaml with the RGM half removed: no sniffer, no LG RESU registers,
+# no revenue meter. For a PV-only installation.
 #
-# 🔴 UNTESTED. This variant has never been run against any inverter. It is the
-#    tested delta-monitor.yaml with the RGM half deleted — nothing was rewritten
-#    — but "it compiles" is not "it works". Nobody here owns a PV-only or
-#    M-series Delta to try it on.
+# ✅ TESTED 2026-09-20 on an E-series: PV data confirmed arriving over the '485'
+#    bus with no RGM sniffer running.
+# ⚠️ M-series UNTESTED — whether it exposes a '485' port at 38400, address 1, with
+#    the same SunSpec/SOLIVIA, is unknown. Expect silence, not wrong values.
 #
-# 🔴 M-SERIES IS AN ASSUMPTION, NOT A CLAIM. This was written because an
-#    M-series owner asked. Whether an M-series exposes a '485' port at all, at
-#    the same baud rate, at address 1, with the same SunSpec layout and the same
-#    SOLIVIA support, is unknown. If it does not, expect silence rather than
-#    wrong readings — see "If you get nothing" below.
+#   ESP32-WROOM-32 (esp32dev, esp-idf)
+#   UART1  GPIO18 TX / GPIO19 RX -> Delta '485', 38400 8N1, Delta is slave addr 1
+#          RJ45 pin 7 = A+, pin 8 = B−
+#   GPIO17 unused. Only ONE RS485-TTL module is needed.
 #
-#   ESP32-WROOM-32, board esp32dev, framework esp-idf
+# MQTT topics are set per entity (delta/485/...), as are birth/will/log, because
+# ESPHome's topic_prefix is per-device.
 #
-#   UART1 / GPIO18 TX, GPIO19 RX
-#                   the Delta's own '485' port, 38400 8N1, Delta is the slave
-#                   at address 1. This board masters it.
-#                   RJ45 pin 7 = A+, pin 8 = B−.
-#
-#   GPIO17 is unused in this variant. Only ONE RS485-TTL module is needed.
-#
-# MQTT TOPICS are set explicitly on every entity, since ESPHome's topic_prefix
-# is per-device:
-#     delta/485/...   the Delta's own port (inverter telemetry)
-# Birth, will and log topics are set explicitly too, or they would land on a bare
-# "delta/status".
-#
-# IF YOU GET NOTHING: the '485' port has no master until this board becomes one,
-# so silence is the expected symptom of every wiring or addressing mistake, and
-# it looks identical to "this inverter does not speak it". Check in this order:
-#   1. delta/485/status reads "online"      -> the board is on your network
-#   2. swap A+/B− at the RJ45               -> harmless, and the usual cause
-#   3. confirm the inverter is Modbus addr 1 -> see its own display/manual
-#   4. only then conclude the protocol differs on your model
+# NO DATA? The '485' port has no master until this board becomes one, so silence is
+# the symptom of every mistake. Check delta/485/status = online, swap A+/B−, confirm
+# Modbus address 1 — then suspect the model.
 # ============================================================================
 
 esphome:
@@ -120,34 +101,13 @@ uart:
     rx_buffer_size: 512
 
 # ---------------------------------------------------------------------------
-# NO RGM UART HERE, and that is safe. The full two-bus config declares a
-# receive-only uart on GPIO17 for the RGM bus (battery + meter), which this
-# PV-only build has no use for.
-#
-# ⚖️ Do NOT copy the reasoning from the '485' uart above. GPIO18 DRIVES that
-#    module's driver input, so it must be declared even when the port is not
-#    polled -- an undriven DI can float and key the transmitter onto a live bus.
-#    GPIO17 only RECEIVES: the RGM module's RO drives it, and no ESP pin is
-#    CONFIGURED to reach that module's DI. Leaving GPIO17 unconfigured is
-#    therefore an input with no driver, and puts nothing at risk on the bus the
-#    inverter masters. GPIO17 is simply unused in this build.
-#
-#    Two same-looking uart blocks, opposite hazards. Worth keeping straight.
-#
-# ✅ CONFIRMED BY THE OWNER, 2026-09-19: on this installation the RGM side is wired
-#    listen-only, and the ESP pin that would transmit onto that bus is PHYSICALLY
-#    UNCONNECTED. So the config-level claim above is backed by the hardware, not just
-#    by the absence of a tx_pin.
-#
-#    The wording stays "no ESP pin is CONFIGURED to reach that module's DI" on purpose:
-#    that stays true if the board is ever rewired, whereas a bare "it is unconnected"
-#    would silently go stale. Re-check the wiring if the hardware changes -- and note
-#    the confirmation is for THAT board, not for yours.
-#
-#    Supporting evidence, weaker but independent: months of the Delta mastering this
-#    bus with crc_bad=0 across millions of sniffed frames. Operational rather than
-#    observational -- it would show a transmitter misbehaving NOW, but only inspection
-#    could show it cannot.
+# NO RGM UART HERE, and that is safe — but not for the reason above.
+# GPIO18 DRIVES the '485' module's DI, so it stays declared even when unpolled: an
+# undriven DI can float and key the transmitter onto a live bus. GPIO17 only
+# RECEIVES, and no ESP pin is CONFIGURED to reach the RGM module's DI, so leaving it
+# unconfigured risks nothing. Confirmed by the owner 2026-09-19 that the pin is
+# physically unconnected on that board — re-check if yours is wired differently.
+# Two same-looking uart blocks, opposite hazards.
 
 # ===========================================================================
 # '485' PORT MASTER — the Delta's own SunSpec/Modbus-RTU slave port (addr 1)
@@ -157,16 +117,12 @@ uart:
 #
 # 🔴 READ ONLY. Only `sensor` platforms are declared — no number/output/switch —
 #    so nothing here can write to the inverter.
-# 🔑 BUS SPACING, and nothing in this file sets it. These devices need >=95 ms between
-#    requests or they start dropping replies — a property of the hardware, not of the
-#    topology, and it applies per device. That floor is supplied by the `modbus` hub's
-#    `turnaround_time`, which DEFAULTS TO 600 ms — six times wider than needed, and
-#    measured 2026-09-19 on the full two-bus config to still let all 45 '485' sensors
-#    meet their update_interval. This variant keeps those same 45 and drops the RGM
-#    half, so it asks strictly less of the same hub.
-#    ⚠️ `command_throttle` on the controller is INERT since 2026.8 and is removed in
-#    2027.2.0. If you ever need the bus tighter, set `turnaround_time` on the hub above,
-#    and never below the 95 ms floor.
+# 🔑 BUS SPACING is not set here. These devices need >=95 ms between requests or
+#    they start dropping replies. That floor comes from the `modbus` hub's
+#    `turnaround_time`, which DEFAULTS TO 600 ms — ample, and measured 2026-09-19 to
+#    still let all 45 '485' sensors meet their update_interval.
+#    ⚠️ `command_throttle` on the controller is INERT since 2026.8 and removed in
+#    2027.2.0. To tighten, set `turnaround_time` on the hub — never below 95 ms.
 # ⚠️ SunSpec values come with a separate SCALE FACTOR register (an int16 power of
 #    ten). Both the raw value AND its SF are published, so the consumer applies the
 #    scaling. The SFs are deliberately not assumed here.
