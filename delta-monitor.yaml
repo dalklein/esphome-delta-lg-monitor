@@ -210,6 +210,11 @@ sensor:
     modbus_controller_id: delta485
     name: "delta ac current"
     id: d485_ac_a_raw
+    on_value:
+      then:
+        - lambda: |-
+            if (!isnan(id(d485_ac_a_sf).state))
+              id(d485_ac_a).publish_state(x * powf(10.0f, id(d485_ac_a_sf).state));
     address: 40071
     register_type: holding
     value_type: S_WORD
@@ -274,6 +279,11 @@ sensor:
     modbus_controller_id: delta485
     name: "delta frequency"
     id: d485_hz_raw
+    on_value:
+      then:
+        - lambda: |-
+            if (!isnan(id(d485_hz_sf).state))
+              id(d485_hz).publish_state(x * powf(10.0f, id(d485_hz_sf).state));
     address: 40085
     register_type: holding
     value_type: S_WORD
@@ -322,6 +332,11 @@ sensor:
     modbus_controller_id: delta485
     name: "delta power factor"
     id: d485_pf_raw
+    on_value:
+      then:
+        - lambda: |-
+            if (!isnan(id(d485_pf_sf).state))
+              id(d485_pf).publish_state(x * powf(10.0f, id(d485_pf_sf).state));
     address: 40091
     register_type: holding
     value_type: S_WORD
@@ -338,6 +353,11 @@ sensor:
     modbus_controller_id: delta485
     name: "delta heatsink temp"
     id: d485_temp_raw
+    on_value:
+      then:
+        - lambda: |-
+            if (!isnan(id(d485_temp_sf).state))
+              id(d485_temp).publish_state(x * powf(10.0f, id(d485_temp_sf).state));
     address: 40102
     register_type: holding
     value_type: S_WORD
@@ -1416,6 +1436,49 @@ sensor:
 # ===========================================================================
 # SOLIVIA: the Delta's second protocol on the '485' port. Carries the per-string PV data
 # and DC-bus/grid values that SunSpec does not expose. Read-only by construction.
+
+# ---------------------------------------------------------------------------
+# SCALED SunSpec values, computed LIVE from each value's own scale factor.
+#
+# The *_raw and *_sf sensors above are published untouched and stay the source
+# of truth. These apply raw x 10^SF at the moment the pair was sampled, rather
+# than baking in a constant: the sweep of 2026-09-05 saw every SF hold steady
+# (distinct=1), but the METER's W_SF on the RGM bus is known to switch with
+# magnitude, so an exponent that looks fixed is not proof that it is.
+# Today these resolve to A /10, Hz /100, PF /1000, temp /10.
+# ---------------------------------------------------------------------------
+  - platform: template
+    name: "delta ac current scaled"
+    id: d485_ac_a
+    unit_of_measurement: "A"
+    device_class: current
+    accuracy_decimals: 2
+    update_interval: never      # published by d485_ac_a_raw's on_value
+    state_topic: "delta/485/sensor/ac_a/state"
+  - platform: template
+    name: "delta frequency scaled"
+    id: d485_hz
+    unit_of_measurement: "Hz"
+    device_class: frequency
+    accuracy_decimals: 2
+    update_interval: never      # published by d485_hz_raw's on_value
+    state_topic: "delta/485/sensor/hz/state"
+  - platform: template
+    name: "delta power factor scaled"
+    id: d485_pf
+    device_class: power_factor
+    accuracy_decimals: 3
+    update_interval: never      # published by d485_pf_raw's on_value
+    state_topic: "delta/485/sensor/pf/state"
+  - platform: template
+    name: "delta heatsink temp scaled"
+    id: d485_temp
+    unit_of_measurement: "°C"
+    device_class: temperature
+    accuracy_decimals: 1
+    update_interval: never      # published by d485_temp_raw's on_value
+    state_topic: "delta/485/sensor/temp/state"
+
 solivia:
   id: sol485
   uart_id: uart_485
