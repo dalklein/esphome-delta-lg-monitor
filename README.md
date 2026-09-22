@@ -6,6 +6,9 @@ PV-only? **[`delta-pv-only.yaml`](delta-pv-only.yaml)** is this config with the 
 removed — one bus, no battery. **Tested on E-series 2026-09-20; untested on M(4/6/8/10)-TL-US.**
 Only one string? **[`delta-pv1-only.yaml`](delta-pv1-only.yaml)** drops PV2 too — an unconnected
 input does not reliably read zero, and `pv_total_w` sums both.
+Simplest of all: **[`delta-sunspec-only.yaml`](delta-sunspec-only.yaml)** — stock Modbus, **no
+external components to fetch or clone**, so it just works on the Home Assistant add-on. The
+trade is that SunSpec exposes only MPPT1, and no DC bus voltage.
 
 It **never transmits on the battery & meter bus** — that side is receive-only, by wiring and by config.
 
