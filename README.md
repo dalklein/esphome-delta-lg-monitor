@@ -187,6 +187,20 @@ A companion project puts an ESP32 **in series with the grid connection meter** �
 That is a different category of thing from this repo: it **transmits**, it **changes inverter
 behaviour**. https://github.com/dalklein/esphome-delta-acrel-mitm
 
+**[robertklep/esphome-delta-solivia](https://github.com/robertklep/esphome-delta-solivia)** — an
+ESPHome component for the *European* Solivia inverters, and where to find Delta's
+["Public Solar Inverter Communication Protocol v1.2"](https://github.com/robertklep/esphome-delta-solivia/blob/main/assets/Public%20RS485%20Protocol%201V2.pdf).
+
+**If you have a documented Solivia model, use that project, not this one.** It implements the
+protocol as published: one command, `CMD[96] + SUB-CMD[1]`, returning a struct, with a frame parser
+per variant (4, 15, 27, 53, 212).
+
+This repo's inverter is not in that document at all — it never mentions TL-US, E-series, M-series or
+hybrid. The **frame layer is identical** (STX/ENQ/ACK/NAK/ETX, CRC16 `X16+X15+X2+1`), but above it
+everything differs: `CMD 96` does not respond here, measurements come from `CMD 111` with a sub per
+value, and the scalings carry one more decimal place. The full comparison is in the
+`485 SOLIVIA MAP` sheet of the register map.
+
 ## Credits
 
 Built by [@dalklein](https://github.com/dalklein) with [Claude Code](https://claude.com/claude-code).
