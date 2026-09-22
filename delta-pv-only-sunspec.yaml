@@ -46,8 +46,8 @@ esphome:
   min_version: 2026.3.0
   # The name sets the mDNS/OTA hostname and the MQTT client id. It does NOT affect
   # the MQTT topics, which are set explicitly on every entity below.
-  name: delta-sunspec-only
-  friendly_name: Delta SunSpec Only Monitor
+  name: delta-pv-only-sunspec
+  friendly_name: Delta PV Only SunSpec Monitor
 
 esp32:
   board: esp32dev

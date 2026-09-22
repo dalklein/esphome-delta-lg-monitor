@@ -2,13 +2,25 @@
 
 ESPHome config for monitoring a **Delta E-series hybrid inverter** E(4/6/8/10)-TL-US
 and an **LG RESU10H-Prime** battery over RS485, on a single ESP32. Publishes ~70 battery registers and the inverter telemetry to MQTT / Home Assistant.  
-PV-only? **[`delta-pv-only.yaml`](delta-pv-only.yaml)** is this config with the RGM half
-removed — one bus, no battery. **Tested on E-series 2026-09-20; untested on M(4/6/8/10)-TL-US.**
-Only one string? **[`delta-pv1-only.yaml`](delta-pv1-only.yaml)** drops PV2 too — an unconnected
-input does not reliably read zero, and `pv_total_w` sums both.
-Simplest of all: **[`delta-sunspec-only.yaml`](delta-sunspec-only.yaml)** — stock Modbus, **no
-external components to fetch or clone**, so it just works on the Home Assistant add-on. The
-trade is that SunSpec exposes only MPPT1, and no DC bus voltage.
+
+## Which config?
+
+| file | what it reads | external components |
+|---|---|---|
+| **[`delta-monitor.yaml`](delta-monitor.yaml)** | the lot — LG RESU battery, revenue meter, inverter, both PV strings. Two buses. | sniffer + `solivia` |
+| **[`delta-pv-only.yaml`](delta-pv-only.yaml)** | inverter + **both** PV strings. No battery, one bus. | `solivia` |
+| **[`delta-pv1-only.yaml`](delta-pv1-only.yaml)** | inverter + **PV1 only**. An unconnected input does not reliably read zero, and `pv_total_w` sums both strings. | `solivia` |
+| **[`delta-pv-only-sunspec.yaml`](delta-pv-only-sunspec.yaml)** | inverter + **MPPT1**, stock Modbus only. No PV2, no DC bus voltage. | **none** |
+
+🏠 **On the Home Assistant ESPHome add-on, use `delta-pv-only-sunspec.yaml`.** The other three
+load the `solivia` component by *local path*, which on the add-on resolves to
+`/config/esphome/components` — a directory that does not exist there, because you never cloned
+anything. They work if you change that source to
+`github://dalklein/esphome-delta-lg-monitor@v1.0.0` (see
+[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)). **The SunSpec one has no external components
+at all**, so it needs no change.
+
+✅ Tested on E-series 2026-09-20. ⚠️ Untested on M(4/6/8/10)-TL-US.
 
 It **never transmits on the battery & meter bus** — that side is receive-only, by wiring and by config.
 
