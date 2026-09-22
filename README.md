@@ -161,7 +161,7 @@ so it cannot be sniffed.
 ## Register map
 
 `docs/LG_RESU_Prime_register_map.ods` — the LG read/write registers, the Delta '485' register list,
-the SOLIVIA command map, and the learnings behind them.
+the SOLIVIA command map, and the learnings behind them.  The last sheet delta_pv_data is a subset from Solivia & Sunspec lists, relevant for logging, included in the .yaml.
 
 ## Related
 
