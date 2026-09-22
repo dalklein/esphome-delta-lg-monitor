@@ -6,8 +6,12 @@
 #
 # ✅ TESTED 2026-09-20 on an E-series: PV data confirmed arriving over the '485'
 #    bus with no RGM sniffer running.
-# ⚠️ M-series UNTESTED — whether it exposes a '485' port at 38400, address 1, with
-#    the same SunSpec/SOLIVIA, is unknown. Expect silence, not wrong values.
+# ✅ M-SERIES ALSO WORKS. Confirmed in the field 2026-09-23 on an M(4/6/8/10)-TL-US:
+#    the '485' port answers at 38400, address 1, and both SunSpec and SOLIVIA reply.
+#    ⚠️ But the M-series has NO RGM BUS — the green terminal block is not populated —
+#    so there is no battery and no revenue meter, and this port is all you get.
+#    ⚠️ Reporter saw implausible SOLIVIA spikes and moved to delta-pv-only-sunspec.yaml.
+#    If you hit the same, that config avoids SOLIVIA entirely.
 #
 #   ESP32-WROOM-32 (esp32dev, esp-idf)
 #   UART1  GPIO18 TX / GPIO19 RX -> Delta '485', 38400 8N1, Delta is server addr 1

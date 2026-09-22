@@ -10,9 +10,11 @@
 #    corrupt the total continuously, not just occasionally. With one string,
 #    do not poll the second.
 #
-# ✅ The '485' side is TESTED (E-series, 2026-09-20). ⚠️ M-series remains untested:
-#    whether it exposes a '485' port at 38400, address 1, with the same
-#    SunSpec/SOLIVIA, is unknown. Expect silence, not wrong values.
+# ✅ The '485' side is TESTED — E-series 2026-09-20, and confirmed in the field on an
+#    M(4/6/8/10)-TL-US 2026-09-23: the port answers at 38400, address 1.
+#    ⚠️ The M-series has NO RGM BUS — the green terminal block is not populated — so
+#    there is no battery and no revenue meter, and this port is all you get.
+#    ⚠️ Reporter saw implausible SOLIVIA spikes and moved to delta-pv-only-sunspec.yaml.
 #
 #   ESP32-WROOM-32 (esp32dev, esp-idf)
 #   UART1  GPIO18 TX / GPIO19 RX -> Delta '485', 38400 8N1, Delta is server addr 1

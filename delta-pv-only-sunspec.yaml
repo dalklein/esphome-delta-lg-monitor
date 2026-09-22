@@ -17,9 +17,11 @@
 #    delta-pv-only.yaml and accept the plausibility filters.
 #    There is also no DC bus voltage: that value is SOLIVIA-only.
 #
-# ✅ The '485' side is TESTED (E-series, 2026-09-20). ⚠️ M-series untested:
-#    whether it exposes a '485' port at 38400, address 1, with the same SunSpec
-#    layout is unknown. Expect silence, not wrong values.
+# ✅ TESTED on BOTH. E-series 2026-09-20, and this is the config an M(4/6/8/10)-TL-US
+#    owner settled on 2026-09-23 after implausible SOLIVIA values — running clean since,
+#    no further issues reported. If you have an M-series, start here.
+#    ⚠️ The M-series has NO RGM BUS — the green terminal block is not populated — so
+#    there is no battery and no revenue meter to read anyway.
 #
 #   ESP32-WROOM-32 (esp32dev, esp-idf)
 #   UART1  GPIO18 TX / GPIO19 RX -> Delta '485', 38400 8N1, Delta is server addr 1
