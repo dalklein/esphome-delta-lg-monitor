@@ -1,7 +1,7 @@
 # esphome-delta-lg-monitor
 
 ESPHome config for monitoring a **Delta E-series hybrid inverter** E(4/6/8/10)-TL-US
-and an **LG RESU10H-Prime** battery over RS485, on a single ESP32. Publishes ~70 battery registers and the inverter telemetry to MQTT / Home Assistant.  
+and an **LG RESU10H-Prime** battery over RS485, on a single ESP32. Publishes ~70 battery registers and the inverter telemetry to MQTT / Home Assistant.  The '485' PV side also works on a similar **Delta M-series PV inverter** M(4/6/8/10)-TL-US.
 
 ## Which config?
 
@@ -20,8 +20,6 @@ anything. They work if you change that source to
 [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)). **The SunSpec one has no external components
 at all**, so it needs no change.
 
-✅ Tested on E-series 2026-09-20. ⚠️ Untested on M(4/6/8/10)-TL-US.
-
 It **never transmits on the battery & meter bus** — that side is receive-only, by wiring and by config.
 
 **New to ESPHome?** Start with **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)** — a
@@ -30,9 +28,10 @@ step-by-step build with nothing assumed.
 ## The buses
 
 A Delta E-series normally has **two** RS485 buses. This project uses both.
-RGM = revenue grade meter, used for inverter & battery modes to control inflow/outflow.
+RGM bus = revenue grade meter & battery connect here. The meter is for modes to control inflow/outflow.
+'485' bus = monitoring bus
 
-⚠️ Unverified on M-series: whether it exposes the RGM connector at all. A PV-only inverter can
+⚠️ Unverified on M-series: whether it exposes the RGM connector. A PV-only inverter can
 legitimately use a grid meter for export limiting, so look before concluding the '485' port is
 all you get.
 
@@ -62,16 +61,16 @@ own. The MITM answers the Delta at `0x02` as if it were the meter, and separatel
 meter on the new segment:
 
 ```
-  RGM bus          Delta (client) ─── LG RESU 0x0F
-                                  └── MITM answering as the meter 0x02
-  meter segment    MITM (client) ──── real revenue meter 0x02
-  '485' port       Delta (server) ←── this project polls it
+  RGM bus          Delta (client) ─── LG RESU 0x0F (server)
+                                  └── MITM answering as the meter 0x02 (server)
+  meter segment    MITM (client) ──── real revenue meter 0x02 (server)
+  '485' port       Delta (server) ←── this project polls it (client)
 ```
 
 That is a different project and is **not** part of this repo — see "Related" below.
 If you have no MITM, there are two buses and the meter simply sits on the RGM bus.
 
-Two facts that invert how you read negatives on the '485' port, and cost real time to learn:
+Two facts that invert how you read negatives on the '485' port:
 the device **always NAKs** an unsupported command — so **silence means a comms fault, not
 "unsupported"** — and the SOLIVIA log indices are **fixed slot IDs, not dates**.
 
@@ -178,7 +177,7 @@ so it cannot be sniffed.
 ## Register map
 
 `docs/LG_RESU_Prime_register_map.ods` — the LG read/write registers, the Delta '485' register list,
-the SOLIVIA command map, and the learnings behind them.  The last sheet delta_pv_data is a subset from Solivia & Sunspec lists, relevant for logging, included in the .yaml.
+the SOLIVIA command map, and the learnings behind them.  The last sheet delta_pv_data is a subset from Solivia & Sunspec lists, relevant for logging, included in the .yaml files.
 
 ## Related
 
@@ -188,7 +187,7 @@ That is a different category of thing from this repo: it **transmits**, it **cha
 behaviour**. https://github.com/dalklein/esphome-delta-acrel-mitm
 
 **[robertklep/esphome-delta-solivia](https://github.com/robertklep/esphome-delta-solivia)** — an
-ESPHome component for the *European* Solivia inverters, and where to find Delta's
+ESPHome component for the older Delta Solivia inverters, and where to find Delta's
 ["Public Solar Inverter Communication Protocol v1.2"](https://github.com/robertklep/esphome-delta-solivia/blob/main/assets/Public%20RS485%20Protocol%201V2.pdf).
 
 **If you have a documented Solivia model, use that project, not this one.** It implements the
@@ -199,7 +198,7 @@ This repo's inverter is not in that document at all — it never mentions TL-US,
 hybrid. The **frame layer is identical** (STX/ENQ/ACK/NAK/ETX, CRC16 `X16+X15+X2+1`), but above it
 everything differs: `CMD 96` does not respond here, measurements come from `CMD 111` with a sub per
 value, and the scalings carry one more decimal place. The full comparison is in the
-`485 SOLIVIA MAP` sheet of the register map.
+`485 SOLIVIA MAP` sheet of the register map.  There may be more, but this is what we found, with trial & error searching the 485 port, starting from the older Solivia protocol.
 
 ## Credits
 
