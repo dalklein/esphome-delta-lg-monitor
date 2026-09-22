@@ -126,7 +126,9 @@ uart:
 # 🔑 BUS SPACING is not set here. These devices need >=95 ms between requests or
 #    they start dropping replies. That floor comes from the `modbus` hub's
 #    `turnaround_time`, which DEFAULTS TO 600 ms — ample, and measured 2026-09-19 to
-#    still let all 45 '485' sensors meet their update_interval.
+#    still let all 45 '485' sensors meet their update_interval. This variant now polls
+#    fewer than that (the battery registers are dropped - no battery here), so it asks
+#    strictly less of the same hub.
 #    ⚠️ `command_throttle` on the controller is INERT since 2026.8 and removed in
 #    2027.2.0. To tighten, set `turnaround_time` on the hub — never below 95 ms.
 # ⚠️ SunSpec values come with a separate SCALE FACTOR register (an int16 power of
@@ -311,22 +313,6 @@ sensor:
     state_topic: "delta/485/sensor/meter_w/state"
   - platform: modbus_controller
     modbus_controller_id: delta485
-    name: "delta battery charge W"
-    id: d485_batt_chg_w
-    address: 49998
-    register_type: holding
-    value_type: U_WORD
-    state_topic: "delta/485/sensor/batt_chg_w/state"
-  - platform: modbus_controller
-    modbus_controller_id: delta485
-    name: "delta battery discharge W"
-    id: d485_batt_dis_w
-    address: 49999
-    register_type: holding
-    value_type: U_WORD
-    state_topic: "delta/485/sensor/batt_dis_w/state"
-  - platform: modbus_controller
-    modbus_controller_id: delta485
     name: "delta lifetime energy"
     id: d485_wh_total
     address: 40093
@@ -370,106 +356,6 @@ sensor:
     value_type: U_WORD
     state_topic: "delta/485/sensor/evt1_hi/state"
   # SIGNED watts, scale 1:1. Positive = charging, negative = discharging.
-  - platform: modbus_controller
-    modbus_controller_id: delta485
-    name: "delta battery DC power"
-    id: d485_batt_w
-    address: 50084
-    register_type: holding
-    value_type: S_WORD
-    state_topic: "delta/485/sensor/batt_w/state"
-  # Wh
-  - platform: modbus_controller
-    modbus_controller_id: delta485
-    name: "delta battery energy B"
-    id: d485_batt_wh_b
-    address: 50086
-    register_type: holding
-    value_type: U_WORD
-    state_topic: "delta/485/sensor/batt_wh_b/state"
-  # Wh
-  - platform: modbus_controller
-    modbus_controller_id: delta485
-    name: "delta battery energy A"
-    id: d485_batt_wh_a
-    address: 50087
-    register_type: holding
-    value_type: U_WORD
-    state_topic: "delta/485/sensor/batt_wh_a/state"
-  # purpose not yet identified
-  - platform: modbus_controller
-    modbus_controller_id: delta485
-    name: "delta batt block 50090"
-    id: d485_b50090
-    address: 50090
-    register_type: holding
-    value_type: U_WORD
-    state_topic: "delta/485/sensor/b50090/state"
-  # purpose not yet identified
-  - platform: modbus_controller
-    modbus_controller_id: delta485
-    name: "delta batt block 50092"
-    id: d485_b50092
-    address: 50092
-    register_type: holding
-    value_type: U_WORD
-    state_topic: "delta/485/sensor/b50092/state"
-  # divide by 10 for volts
-  - platform: modbus_controller
-    modbus_controller_id: delta485
-    name: "delta battery bus voltage"
-    id: d485_batt_bus_v
-    address: 50094
-    register_type: holding
-    value_type: U_WORD
-    state_topic: "delta/485/sensor/batt_bus_v/state"
-  # SIGNED, divide by 10 for amps
-  - platform: modbus_controller
-    modbus_controller_id: delta485
-    name: "delta battery bus current"
-    id: d485_batt_bus_a
-    address: 50095
-    register_type: holding
-    value_type: S_WORD
-    state_topic: "delta/485/sensor/batt_bus_a/state"
-  # purpose not yet identified
-  - platform: modbus_controller
-    modbus_controller_id: delta485
-    name: "delta batt block 50096"
-    id: d485_b50096
-    address: 50096
-    register_type: holding
-    value_type: U_WORD
-    state_topic: "delta/485/sensor/b50096/state"
-  # purpose not yet identified
-  - platform: modbus_controller
-    modbus_controller_id: delta485
-    name: "delta batt block 50097"
-    id: d485_b50097
-    address: 50097
-    register_type: holding
-    value_type: U_WORD
-    state_topic: "delta/485/sensor/b50097/state"
-  # purpose not yet identified
-  - platform: modbus_controller
-    modbus_controller_id: delta485
-    name: "delta batt block 50107"
-    id: d485_b50107
-    address: 50107
-    register_type: holding
-    value_type: U_WORD
-    state_topic: "delta/485/sensor/b50107/state"
-  # purpose not yet identified
-  - platform: modbus_controller
-    modbus_controller_id: delta485
-    name: "delta batt block 50116"
-    id: d485_b50116
-    address: 50116
-    register_type: holding
-    value_type: U_WORD
-    state_topic: "delta/485/sensor/b50116/state"
-
-  # --- SOLIVIA values (cmd 111), the half SunSpec cannot reach ---
   - platform: solivia
     solivia_id: sol485
     name: "delta pv1 voltage"
