@@ -97,7 +97,7 @@ Could not find directory '/config/esphome/components'. Please make sure it exist
 as it already does for the sniffer:
 
 ```yaml
-  - source: github://dalklein/esphome-delta-lg-monitor
+  - source: github://dalklein/esphome-delta-lg-monitor@v1.0.0
     components: [solivia]
 ```
 
@@ -280,7 +280,7 @@ that "isn't configured" rather than as an error. Combine the *entries* under one
 external_components:
   - source: github://dalklein/esphome-modbus-rtu-sniffer@v1.1.0   # only if you sniff the RGM bus
     components: [modbus_rtu_sniffer]
-  - source: github://dalklein/esphome-delta-lg-monitor
+  - source: github://dalklein/esphome-delta-lg-monitor@v1.0.0
     components: [solivia]
   - source: ...your existing one...
 

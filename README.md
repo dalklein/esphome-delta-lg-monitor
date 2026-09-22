@@ -89,7 +89,7 @@ when not polling.
 external_components:
   - source: github://dalklein/esphome-modbus-rtu-sniffer@v1.1.0
     components: [modbus_rtu_sniffer]
-  - source: github://dalklein/esphome-delta-lg-monitor
+  - source: github://dalklein/esphome-delta-lg-monitor@v1.0.0
     components: [solivia]
 ```
 
@@ -100,8 +100,9 @@ Pin it and move the pin deliberately. (ESPHome keys its cache by URL *and* ref, 
 the ref fetches fresh rather than reusing the old checkout. Clearing `.esphome/` forces a
 refetch if you ever need one.)
 
-`solivia` is left unpinned above because it ships from *this* repo — the one you already
-cloned — so it moves only when you pull.
+The same applies to `@v1.0.0` for `solivia`. If you cloned this repo you can instead point at
+your own copy with `source: {type: local, path: components}`, which is what the shipped YAML does —
+it then moves only when you pull.
 
 Copy `secrets.yaml.example` to `secrets.yaml`, fill it in, then `esphome run delta-monitor.yaml`.
 
