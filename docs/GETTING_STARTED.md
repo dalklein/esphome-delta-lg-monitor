@@ -11,6 +11,10 @@ experience assumed. If you already run ESPHome, the short version is in the READ
 **Known to work:** Delta **E6-TL-US** inverter with an **LG RESU10H-Prime** battery.
 The other E-series units (E4/E8/E10-TL-US) use the same interfaces and should work.
 
+🔑 **Which config file?** Battery + inverter → `delta-monitor.yaml`. **No battery (PV-only) →
+`delta-pv-only.yaml`**, one bus and one RS485 module. Substitute it wherever this guide says
+`delta-monitor.yaml`.
+
 ⚠️ **Delta M-series is untested.** Nobody has run this against one. The M-series may not
 expose the same RGM terminal block or the same '485' register map, so treat anything here
 as unverified on that hardware. If you try it, the receive-only design means you can look
@@ -21,7 +25,7 @@ without risk — see the safety note in step 5.
 | | |
 |---|---|
 | ESP32 board | ESP32-WROOM-32 devkit (the config targets `esp32dev`) |
-| 2 × RS485-to-TTL modules | **auto-direction** type, with no DE/RE pin |
+| 2 × RS485-to-TTL modules | **auto-direction** type, no DE/RE pin — **one** is enough for `delta-pv-only.yaml` |
 | An MQTT broker | **Required.** Mosquitto is the usual choice |
 | A computer | Linux, macOS or Windows, with Python 3 |
 | A USB cable | For the first flash only; later updates go over WiFi |
@@ -55,15 +59,22 @@ line did not run — you need it once per terminal window, and your prompt will 
 
 ---
 
-## 2. Download the project
+## 2. Get the project
+
+Using the CLI from step 1, clone it:
 
 ```bash
 git clone https://github.com/dalklein/esphome-delta-lg-monitor.git
 cd esphome-delta-lg-monitor
 ```
 
-🔑 **You have to clone it — pointing ESPHome at the GitHub URL will not work.** The
-`solivia` component lives in this repo's `components/` folder and is loaded by *local path*:
+On the Home Assistant add-on you do not clone at all — copy the one YAML you want into
+`/config/esphome/` and read the next part, which is the only thing that differs.
+
+### Which ESPHome are you running? This decides one line of the config
+
+**CLI (the venv above), with the repo cloned** — the config works as shipped. `solivia` loads by
+*local path*, which resolves because the files sit next to the YAML:
 
 ```yaml
   - source:
@@ -72,7 +83,25 @@ cd esphome-delta-lg-monitor
     components: [solivia]
 ```
 
-A local path only resolves if the files are on your disk, next to the YAML.
+**Home Assistant ESPHome add-on** — you have no clone, and your YAML lives in `/config/esphome/`.
+That local path then points at `/config/esphome/components`, which does not exist, and the build
+stops with:
+
+```
+Could not find directory '/config/esphome/components'. Please make sure it exists
+(full path: /config/esphome/components)
+```
+
+**Fix: replace those four lines with one.** ESPHome then fetches the component from GitHub, exactly
+as it already does for the sniffer:
+
+```yaml
+  - source: github://dalklein/esphome-delta-lg-monitor
+    components: [solivia]
+```
+
+Nothing else changes, and you never need to clone. (Copying the repo's `components/` folder into
+`/config/esphome/components/` also works, but it is a copy you then have to keep up to date.)
 
 ### The other component, and what `@v1.1.0` means
 
@@ -238,10 +267,50 @@ esphome run delta-monitor.yaml
 
 ---
 
+## Adding this to an ESP32 that already does something else
+
+Start from **`delta-pv-only.yaml`** if you have no battery — it is one bus and far less to merge.
+
+YAML has no merge: **a top-level key can appear only once.** Paste a second `uart:` or
+`external_components:` and the later one silently replaces the first, which shows up as a component
+that "isn't configured" rather than as an error. Combine the *entries* under one key instead:
+
+```yaml
+external_components:
+  - source: github://dalklein/esphome-modbus-rtu-sniffer@v1.1.0   # only if you sniff the RGM bus
+    components: [modbus_rtu_sniffer]
+  - source: github://dalklein/esphome-delta-lg-monitor
+    components: [solivia]
+  - source: ...your existing one...
+
+uart:
+  - id: uart_485          # this project
+    tx_pin: GPIO18
+    rx_pin: GPIO19
+    baud_rate: 38400
+  - id: your_existing_uart
+    ...
+```
+
+Check these before building:
+
+- **GPIO18 and GPIO19 must be free.** The ESP32 has several UARTs, so pick different pins if they
+  clash — change them in the `uart:` block and nowhere else.
+- **Ids must be unique** across the merged file: `uart_485`, `mb485`, `delta485`, `sol485`.
+- **Do not copy `logger: baud_rate: 0`** if your existing device logs over USB. That line frees UART0
+  and is why this project sees no serial output.
+- **Topics are hardcoded per entity** as `delta/485/...`, not derived from `topic_prefix`. They will
+  not follow your device's prefix — edit them if you want them somewhere else.
+- **Keep one `mqtt:`, one `wifi:`, one `esphome:`.** Take your existing ones; this project needs
+  nothing special from them beyond MQTT being present.
+
 ## If you get stuck
 
 - **`esphome: command not found`** — the venv is not active. Run
   `source ~/venvs/esphome/bin/activate` again.
+- **`Could not find directory '/config/esphome/components'`** — you are on the Home Assistant
+  ESPHome add-on, where the `type: local` source cannot resolve. Swap it for the `github://` source
+  shown in step 2. Nothing needs cloning.
 - **The build fails on a missing component** — you are probably running from a downloaded
   ZIP rather than a `git clone`, or from the wrong folder. `components/` must sit beside
   `delta-monitor.yaml`.
