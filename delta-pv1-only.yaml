@@ -1,26 +1,34 @@
 # ============================================================================
-# Delta inverter monitor — '485' PORT ONLY. One RS485 bus, no battery.
+# Delta inverter monitor — '485' PORT ONLY, SINGLE PV STRING (PV1).
 #
-# delta-monitor.yaml with the RGM half removed: no sniffer, no LG RESU registers,
-# no revenue meter. For a PV-only installation.
+# delta-pv-only.yaml with the PV2 string removed as well. Use this when only
+# MPPT1 has panels on it.
 #
-# ✅ TESTED 2026-09-20 on an E-series: PV data confirmed arriving over the '485'
-#    bus with no RGM sniffer running.
-# ⚠️ M-series UNTESTED — whether it exposes a '485' port at 38400, address 1, with
-#    the same SunSpec/SOLIVIA, is unknown. Expect silence, not wrong values.
+# 🔑 WHY THIS EXISTS: an UNCONNECTED string does not necessarily read zero.
+#    Non-zero values have been seen on an unused input in Delta's own phone app,
+#    and pv_total_w adds PV1 + PV2 - so polling a string that is not there can
+#    corrupt the total continuously, not just occasionally. With one string,
+#    do not poll the second.
+#
+# ✅ The '485' side is TESTED (E-series, 2026-09-20). ⚠️ M-series remains untested:
+#    whether it exposes a '485' port at 38400, address 1, with the same
+#    SunSpec/SOLIVIA, is unknown. Expect silence, not wrong values.
 #
 #   ESP32-WROOM-32 (esp32dev, esp-idf)
 #   UART1  GPIO18 TX / GPIO19 RX -> Delta '485', 38400 8N1, Delta is server addr 1
-#          RJ45 pin 7 = A+, pin 8 = B−
+#          RJ45 pin 7 = A+, pin 8 = B-
 #   GPIO17 unused. Only ONE RS485-TTL module is needed.
+#
+# pv_total_w is still published and equals PV1, so a dashboard built against the
+# two-string config keeps working unchanged.
 #
 # MQTT topics are set per entity (delta/485/...), as are birth/will/log, because
 # ESPHome's topic_prefix is per-device.
 #
 # NO DATA? The '485' port has no client until this board becomes one, so silence is
-# the symptom of every mistake. Check delta/485/status = online, swap A+/B−, confirm
-# Modbus address 1 — then suspect the model.
-# ============================================================================
+# the symptom of every mistake. Check delta/485/status = online, swap A+/B-, confirm
+# Modbus address 1 - then suspect the model.
+# ==============================================================================
 
 esphome:
   # 🔴 2026.3.0 is the first release with the modbus hub's `turnaround_time`, which is
@@ -31,8 +39,8 @@ esphome:
   min_version: 2026.3.0
   # The name sets the mDNS/OTA hostname and the MQTT client id. It does NOT affect
   # the MQTT topics, which are set explicitly on every entity below.
-  name: delta-pv-only
-  friendly_name: Delta PV Only Monitor
+  name: delta-pv1-only
+  friendly_name: Delta PV1 Only Monitor
 
 esp32:
   board: esp32dev
@@ -405,56 +413,18 @@ sensor:
     on_value:
       then:
         - lambda: |-
-            if (!isnan(id(sol_pv1_v).state))
-              id(pv1_w).publish_state(id(sol_pv1_v).state * x);
+            // One string, so the total IS PV1. pv_total_w is kept so a dashboard
+            // built against the two-string config needs no change.
+            if (!isnan(id(sol_pv1_v).state)) {
+              float p1 = id(sol_pv1_v).state * x;
+              id(pv1_w).publish_state(p1);
+              id(pv_total_w).publish_state(p1);
+            }
     cmd: 111
     sub: 2
     divisor: 100.0
     accuracy_decimals: 2   # ESPHome defaults to 0 when unset, which rounded every value to a whole number
     state_topic: "delta/485/sensor/pv1_a/state"
-    # Plausibility gate. Rare misaligned reads return a CRC-VALID frame whose
-    # payload parses at the wrong offset - low byte 0x00, high byte 0xE4-0xF8,
-    # e.g. raw 63488 -> 6348.8 V. Seen 4 times in 83,416 points on the E6 and far
-    # more often elsewhere. NAN is dropped, so a bad sample leaves a gap, not a spike.
-    filters:
-      - lambda: |-
-          if (x > 20.0f) return {};   // {} = drop the sample; NAN would PUBLISH NaN
-          return x;                 // A  - comfortably above any string Isc here
-  - platform: solivia
-    solivia_id: sol485
-    name: "delta pv2 voltage"
-    id: sol_pv2_v
-    cmd: 111
-    sub: 11
-    divisor: 10.0
-    accuracy_decimals: 1   # ESPHome defaults to 0 when unset, which rounded every value to a whole number
-    state_topic: "delta/485/sensor/pv2_v/state"
-    # Plausibility gate. Rare misaligned reads return a CRC-VALID frame whose
-    # payload parses at the wrong offset - low byte 0x00, high byte 0xE4-0xF8,
-    # e.g. raw 63488 -> 6348.8 V. Seen 4 times in 83,416 points on the E6 and far
-    # more often elsewhere. NAN is dropped, so a bad sample leaves a gap, not a spike.
-    filters:
-      - lambda: |-
-          if (x > 600.0f) return {};   // {} = drop the sample; NAN would PUBLISH NaN
-          return x;                 // V  - no PV string on this inverter class reaches 600 V
-  - platform: solivia
-    solivia_id: sol485
-    name: "delta pv2 current"
-    id: sol_pv2_a
-    on_value:
-      then:
-        - lambda: |-
-            if (!isnan(id(sol_pv2_v).state)) {
-              float p2 = id(sol_pv2_v).state * x;
-              id(pv2_w).publish_state(p2);
-              if (!isnan(id(pv1_w).state))
-                id(pv_total_w).publish_state(id(pv1_w).state + p2);
-            }
-    cmd: 111
-    sub: 12
-    divisor: 100.0
-    accuracy_decimals: 2   # ESPHome defaults to 0 when unset, which rounded every value to a whole number
-    state_topic: "delta/485/sensor/pv2_a/state"
     # Plausibility gate. Rare misaligned reads return a CRC-VALID frame whose
     # payload parses at the wrong offset - low byte 0x00, high byte 0xE4-0xF8,
     # e.g. raw 63488 -> 6348.8 V. Seen 4 times in 83,416 points on the E6 and far
@@ -495,20 +465,12 @@ sensor:
     update_interval: never      # published by sol_pv1_a's on_value - see below
     state_topic: "delta/485/sensor/pv1_w/state"
   - platform: template
-    name: "delta pv2 power"
-    id: pv2_w
-    unit_of_measurement: W
-    device_class: power
-    accuracy_decimals: 1
-    update_interval: never      # published by sol_pv2_a's on_value - see below
-    state_topic: "delta/485/sensor/pv2_w/state"
-  - platform: template
     name: "delta pv total power"
     id: pv_total_w
     unit_of_measurement: W
     device_class: power
     accuracy_decimals: 1
-    update_interval: never      # published by sol_pv2_a's on_value - see below
+    update_interval: never      # published by sol_pv1_a's on_value - see below
     state_topic: "delta/485/sensor/pv_total_w/state"
 
   # SOLIVIA also reports grid frequency, but it is deliberately not polled here: SunSpec
@@ -594,9 +556,9 @@ solivia:
   # each V/A PAIR sampled close together, which matters because V x A is multiplied
   # below -- sampling them 2 s apart smears the derived power across a changing load.
   # ⚠️ The pairing comes from SENSOR DECLARATION ORDER above, nothing else:
-  #        pv1_v,pv1_a | pv2_v,pv2_a | dcbus_v
+  #        pv1_v,pv1_a | dcbus_v     (3 items: the pair never splits)
   # Reordering or inserting a sensor re-pairs them silently. Re-check if you edit.
-  # Bus cost is 0.5 requests/s and each value refreshes every 12 s.
+  # Bus cost is 0.5 requests/s; with 3 items each value refreshes every 8 s.
   burst: 2
   update_interval: 4s
 

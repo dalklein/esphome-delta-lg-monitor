@@ -570,6 +570,14 @@ sensor:
     divisor: 10.0
     accuracy_decimals: 1   # ESPHome defaults to 0 when unset, which rounded every value to a whole number
     state_topic: "delta/485/sensor/pv1_v/state"
+    # Plausibility gate. Rare misaligned reads return a CRC-VALID frame whose
+    # payload parses at the wrong offset - low byte 0x00, high byte 0xE4-0xF8,
+    # e.g. raw 63488 -> 6348.8 V. Seen 4 times in 83,416 points on the E6 and far
+    # more often elsewhere. NAN is dropped, so a bad sample leaves a gap, not a spike.
+    filters:
+      - lambda: |-
+          if (x > 600.0f) return {};   // {} = drop the sample; NAN would PUBLISH NaN
+          return x;                 // V  - no PV string on this inverter class reaches 600 V
   - platform: solivia
     solivia_id: sol485
     name: "delta pv1 current"
@@ -584,6 +592,14 @@ sensor:
     divisor: 100.0
     accuracy_decimals: 2   # ESPHome defaults to 0 when unset, which rounded every value to a whole number
     state_topic: "delta/485/sensor/pv1_a/state"
+    # Plausibility gate. Rare misaligned reads return a CRC-VALID frame whose
+    # payload parses at the wrong offset - low byte 0x00, high byte 0xE4-0xF8,
+    # e.g. raw 63488 -> 6348.8 V. Seen 4 times in 83,416 points on the E6 and far
+    # more often elsewhere. NAN is dropped, so a bad sample leaves a gap, not a spike.
+    filters:
+      - lambda: |-
+          if (x > 20.0f) return {};   // {} = drop the sample; NAN would PUBLISH NaN
+          return x;                 // A  - comfortably above any string Isc here
   - platform: solivia
     solivia_id: sol485
     name: "delta pv2 voltage"
@@ -593,6 +609,14 @@ sensor:
     divisor: 10.0
     accuracy_decimals: 1   # ESPHome defaults to 0 when unset, which rounded every value to a whole number
     state_topic: "delta/485/sensor/pv2_v/state"
+    # Plausibility gate. Rare misaligned reads return a CRC-VALID frame whose
+    # payload parses at the wrong offset - low byte 0x00, high byte 0xE4-0xF8,
+    # e.g. raw 63488 -> 6348.8 V. Seen 4 times in 83,416 points on the E6 and far
+    # more often elsewhere. NAN is dropped, so a bad sample leaves a gap, not a spike.
+    filters:
+      - lambda: |-
+          if (x > 600.0f) return {};   // {} = drop the sample; NAN would PUBLISH NaN
+          return x;                 // V  - no PV string on this inverter class reaches 600 V
   - platform: solivia
     solivia_id: sol485
     name: "delta pv2 current"
@@ -611,6 +635,14 @@ sensor:
     divisor: 100.0
     accuracy_decimals: 2   # ESPHome defaults to 0 when unset, which rounded every value to a whole number
     state_topic: "delta/485/sensor/pv2_a/state"
+    # Plausibility gate. Rare misaligned reads return a CRC-VALID frame whose
+    # payload parses at the wrong offset - low byte 0x00, high byte 0xE4-0xF8,
+    # e.g. raw 63488 -> 6348.8 V. Seen 4 times in 83,416 points on the E6 and far
+    # more often elsewhere. NAN is dropped, so a bad sample leaves a gap, not a spike.
+    filters:
+      - lambda: |-
+          if (x > 20.0f) return {};   // {} = drop the sample; NAN would PUBLISH NaN
+          return x;                 // A  - comfortably above any string Isc here
   - platform: solivia
     solivia_id: sol485
     name: "delta dc bus voltage"
@@ -620,6 +652,14 @@ sensor:
     divisor: 10.0
     accuracy_decimals: 1   # ESPHome defaults to 0 when unset, which rounded every value to a whole number
     state_topic: "delta/485/sensor/dcbus_v/state"
+    # Plausibility gate. Rare misaligned reads return a CRC-VALID frame whose
+    # payload parses at the wrong offset - low byte 0x00, high byte 0xE4-0xF8,
+    # e.g. raw 63488 -> 6348.8 V. Seen 4 times in 83,416 points on the E6 and far
+    # more often elsewhere. NAN is dropped, so a bad sample leaves a gap, not a spike.
+    filters:
+      - lambda: |-
+          if (x > 600.0f) return {};   // {} = drop the sample; NAN would PUBLISH NaN
+          return x;                 // V  - the DC bus runs 400-450 V
   # --- DERIVED PV POWER --------------------------------------------------
   # There is NO PV power register and NO PV energy counter on this inverter
   # (SunSpec model 160 is not implemented; the vendor block has none either).

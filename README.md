@@ -4,6 +4,8 @@ ESPHome config for monitoring a **Delta E-series hybrid inverter** E(4/6/8/10)-T
 and an **LG RESU10H-Prime** battery over RS485, on a single ESP32. Publishes ~70 battery registers and the inverter telemetry to MQTT / Home Assistant.  
 PV-only? **[`delta-pv-only.yaml`](delta-pv-only.yaml)** is this config with the RGM half
 removed — one bus, no battery. **Tested on E-series 2026-09-20; untested on M(4/6/8/10)-TL-US.**
+Only one string? **[`delta-pv1-only.yaml`](delta-pv1-only.yaml)** drops PV2 too — an unconnected
+input does not reliably read zero, and `pv_total_w` sums both.
 
 It **never transmits on the battery & meter bus** — that side is receive-only, by wiring and by config.
 
