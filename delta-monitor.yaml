@@ -19,6 +19,12 @@
 # ============================================================================
 
 esphome:
+  # 🔴 2026.3.0 is the first release with the modbus hub's `turnaround_time`, which is
+  # what supplies the >=95 ms bus spacing these devices need. On anything older that
+  # option does not exist and `command_throttle` defaults to 0ms, so the '485' bus is
+  # polled unspaced: it builds, flashes and runs, and drops replies intermittently.
+  # Verified on 2026.2.0 - it validates clean and resolves to command_throttle: 0ms.
+  min_version: 2026.3.0
   # The name sets the mDNS/OTA hostname and the MQTT client id. It does NOT affect
   # the MQTT topics, which are set explicitly on every entity below.
   name: delta-monitor

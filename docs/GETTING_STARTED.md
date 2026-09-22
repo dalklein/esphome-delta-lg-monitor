@@ -27,6 +27,7 @@ without risk — see the safety note in step 5.
 | ESP32 board | ESP32-WROOM-32 devkit (the config targets `esp32dev`) |
 | 2 × RS485-to-TTL modules | **auto-direction** type, no DE/RE pin — **one** is enough for `delta-pv-only.yaml` |
 | An MQTT broker | **Required.** Mosquitto is the usual choice |
+| ESPHome **2026.3.0 or newer** | older versions poll the '485' bus with no spacing and drop replies — the config refuses to build on them |
 | A computer | Linux, macOS or Windows, with Python 3 |
 | A USB cable | For the first flash only; later updates go over WiFi |
 
