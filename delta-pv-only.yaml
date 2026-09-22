@@ -335,6 +335,11 @@ sensor:
     modbus_controller_id: delta485
     name: "delta lifetime energy"
     id: d485_wh_total
+    on_value:
+      then:
+        - lambda: |-
+            if (!isnan(id(d485_wh_sf).state))
+              id(d485_wh_kwh).publish_state(x * powf(10.0f, id(d485_wh_sf).state) / 1000.0f);
     address: 40093
     register_type: holding
     value_type: U_DWORD
@@ -528,6 +533,18 @@ sensor:
     accuracy_decimals: 1
     update_interval: never      # published by d485_temp_raw's on_value
     state_topic: "delta/485/sensor/temp/state"
+  - platform: template
+    name: "delta lifetime energy kWh"
+    id: d485_wh_kwh
+    unit_of_measurement: "kWh"
+    device_class: energy
+    state_class: total_increasing
+    accuracy_decimals: 3
+    update_interval: never      # published by d485_wh_total's on_value
+    state_topic: "delta/485/sensor/lifetime_kwh/state"
+    # 40093+40094 read as one U_DWORD, x 10^WH_SF (40095), then /1000.
+    # This is AC energy delivered, NOT PV harvest: the inverter exposes no
+    # PV total at all - no SunSpec MPPT model, and the DC block is MPPT1 only.
 
 solivia:
   id: sol485
