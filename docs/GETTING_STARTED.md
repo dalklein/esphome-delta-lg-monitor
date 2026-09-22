@@ -15,10 +15,11 @@ The other E-series units (E4/E8/E10-TL-US) use the same interfaces and should wo
 `delta-pv-only.yaml`**, one bus and one RS485 module. Substitute it wherever this guide says
 `delta-monitor.yaml`.
 
-⚠️ **Delta M-series is untested.** Nobody has run this against one. The M-series may not
-expose the same RGM terminal block or the same '485' register map, so treat anything here
-as unverified on that hardware. If you try it, the receive-only design means you can look
-without risk — see the safety note in step 5.
+⚠️ **Delta M-series: the `'485'` side works, but there is no RGM bus.** The green RGM terminal
+block is **not populated** on an M(4/6/8/10)-TL-US, so there is no battery and no revenue meter to
+read. Use `delta-pv-only.yaml`, `delta-pv1-only.yaml` or `delta-pv-only-sunspec.yaml` — **not
+`delta-monitor.yaml`**, which polls a bus that hardware does not have. The register map itself was
+derived on an E-series, so treat individual values as unconfirmed until you have checked them.
 
 **You will also need:**
 

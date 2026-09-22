@@ -7,7 +7,7 @@ and an **LG RESU10H-Prime** battery over RS485, on a single ESP32. Publishes ~70
 
 | file | what it reads | external components |
 |---|---|---|
-| **[`delta-monitor.yaml`](delta-monitor.yaml)** | the lot — LG RESU battery, revenue meter, inverter, both PV strings. Two buses. | sniffer + `solivia` |
+| **[`delta-monitor.yaml`](delta-monitor.yaml)** | the lot — LG RESU battery, revenue meter, inverter, both PV strings. Two buses. **E-series only** — the M-series has no RGM bus. | sniffer + `solivia` |
 | **[`delta-pv-only.yaml`](delta-pv-only.yaml)** | inverter + **both** PV strings. No battery, one bus. | `solivia` |
 | **[`delta-pv1-only.yaml`](delta-pv1-only.yaml)** | inverter + **PV1 only**. An unconnected input does not reliably read zero, and `pv_total_w` sums both strings. | `solivia` |
 | **[`delta-pv-only-sunspec.yaml`](delta-pv-only-sunspec.yaml)** | inverter + **MPPT1**, stock Modbus only. No PV2, no DC bus voltage. | **none** |
@@ -31,9 +31,12 @@ A Delta E-series normally has **two** RS485 buses. This project uses both.
 RGM bus = revenue grade meter & battery connect here. The meter is for modes to control inflow/outflow.
 '485' bus = monitoring bus
 
-⚠️ Unverified on M-series: whether it exposes the RGM connector. A PV-only inverter can
-legitimately use a grid meter for export limiting, so look before concluding the '485' port is
-all you get.
+🔴 **The M-series has no RGM bus.** The green RGM terminal block is **not populated** on an
+M(4/6/8/10)-TL-US, so there is no battery and no revenue meter to read, and the `'485'` port really
+is all you get. Everything below about the RGM bus applies to the E-series only.
+➡️ On an M-series use one of the `'485'`-only configs — `delta-pv-only.yaml`, `delta-pv1-only.yaml`
+or `delta-pv-only-sunspec.yaml`. **`delta-monitor.yaml` cannot work there**: it polls a bus the
+hardware does not have.
 
 | | **RGM bus** | **the Delta's '485' port** |
 |---|---|---|
@@ -82,7 +85,8 @@ the device **always NAKs** an unsupported command — so **silence means a comms
 ![Delta E6-TL-US communication ports: two RJ45 jacks labelled Ethernet/485 and CAN/485, and the green RGM terminal block below them](docs/E6-TL-US_comm_ports.jpg)
 
 Where the two buses land on an E6-TL-US: the green **RGM** terminal block, and the **'485'** port —
-either RJ45 works, pin 7 = A+, pin 8 = B−.
+either RJ45 works, pin 7 = A+, pin 8 = B−. On an M-series that green block is **not populated**, so
+only the RJ45 side applies.
 
 ```
 ESP32-WROOM-32 (esp32dev, esp-idf)
