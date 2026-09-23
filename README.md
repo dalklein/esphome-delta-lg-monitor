@@ -22,8 +22,11 @@ at all**, so it needs no change.
 
 It **never transmits on the battery & meter bus** — that side is receive-only, by wiring and by config.
 
-**New to ESPHome?** Start with **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)** — a
-step-by-step build with nothing assumed.
+**New to ESPHome?**
+· **PV only** → **[docs/GETTING_STARTED_sunspec.md](docs/GETTING_STARTED_sunspec.md)** — the short
+path: one file, one RS485 module, nothing to clone, works on the HA add-on unchanged.
+· **Battery + meter** → **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)** — the full two-bus
+build, with nothing assumed.
 
 ## The buses
 

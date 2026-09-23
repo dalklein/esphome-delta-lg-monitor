@@ -1,5 +1,8 @@
 # Getting started
 
+> **Just want PV data?** [GETTING_STARTED_sunspec.md](GETTING_STARTED_sunspec.md) is much shorter —
+> one file, one RS485 module, no components to fetch. Use this page for the battery and meter.
+
 A step-by-step build for someone who has not used ESPHome before. No Linux, C or YAML
 experience assumed. If you already run ESPHome, the short version is in the README's
 [Use](../README.md#use) section instead.
