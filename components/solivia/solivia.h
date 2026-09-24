@@ -45,7 +45,7 @@ class Solivia : public PollingComponent, public uart::UARTDevice {
   std::vector<Item> items_;
   size_t next_{0};                 // index of the next item in the round-robin
   uint8_t burst_{1};               // transactions issued back-to-back per update()
-  uint32_t ok_{0}, fail_{0}, refused_{0};
+  uint32_t ok_{0}, fail_{0}, refused_{0}, mismatch_{0};
 };
 
 }  // namespace solivia

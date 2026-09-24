@@ -104,6 +104,23 @@ bool Solivia::transact_(uint8_t cmd, uint8_t sub, uint16_t &value_out) {
     ESP_LOGV(TAG, "cmd=%u sub=%u: no valid reply (%u bytes)", cmd, sub, (unsigned) n);
     return false;
   }
+  // 🔑 The reply must answer the question we asked. Delta's own spec (Public Solar Inverter
+  // Communication Protocol v1.2, packet 2) puts "repeat command being responded to" at byte 5
+  // and "repeat sub command" at byte 6 -- buf[4] and buf[5] here -- which is why the payload
+  // starts at buf[6].
+  //
+  // Without this, a LATE reply to the PREVIOUS request is accepted as the answer to the current
+  // one: it is a well-formed frame with a good CRC, so length/ETX/CRC/ACK all pass. The '485'
+  // UART is shared with the modbus client and loses 7-9% of SOLIVIA polls when the inverter is
+  // working hard, which is exactly the condition that desynchronises request and reply. The
+  // result is one sensor publishing another's value -- plausible-looking, and wrong.
+  if (buf[4] != cmd || buf[5] != sub) {
+    this->mismatch_++;
+    ESP_LOGW(TAG, "cmd=%u sub=%u: reply was for cmd=%u sub=%u - discarded",
+             cmd, sub, buf[4], buf[5]);
+    return false;
+  }
+
   // Payload is bytes 6 .. n-4 inclusive; take the first 16-bit big-endian word.
   const size_t plen = (n >= 9) ? (n - 3 - 6) : 0;
   if (plen < 2) {
@@ -152,8 +169,9 @@ void Solivia::update() {
   static uint32_t last_report = 0;
   if (millis() - last_report > 60000) {
     last_report = millis();
-    ESP_LOGI(TAG, "stats: ok=%" PRIu32 " fail=%" PRIu32 " refused=%" PRIu32,
-             this->ok_, this->fail_, this->refused_);
+    ESP_LOGI(TAG, "stats: ok=%" PRIu32 " fail=%" PRIu32 " refused=%" PRIu32
+             " mismatch=%" PRIu32,
+             this->ok_, this->fail_, this->refused_, this->mismatch_);
   }
 }
 
